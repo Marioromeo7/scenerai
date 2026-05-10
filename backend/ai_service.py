@@ -1,0 +1,335 @@
+"""
+AI service layer.
+- generate_scenario_metadata(): uses LLaMA 3.3 70B via Groq (one call at scenario creation)
+- engine_init(): initializes the full notebook engine for a new session
+- engine_turn(): runs one turn through the full engine (not a bare Groq call)
+"""
+import asyncio
+import re
+import json
+import logging
+from groq import Groq
+from config import settings
+from engine import Scenario, scenario_to_engine, serialize_engine, deserialize_engine
+from engine.call import init_client, MAX_RAW_TURNS
+from engine.inference import (
+    detect_from_player_input,
+    translate_input, translate_output,
+    preprocess, build_system,
+    check_sovereignty, extract_and_save_assumptions, summarize_async,
+    guard_response, sanitize_input,
+)
+from engine.call import async_stream_call
+
+logger = logging.getLogger(__name__)
+
+# Engine models available for play
+ENGINE_MODELS = {
+    "llama-3.1-8b-instant":    "LLaMA 3.1 8B — fastest",
+    "llama-3.3-70b-versatile": "LLaMA 3.3 70B — best quality",
+    "llama-3.1-70b-versatile": "LLaMA 3.1 70B — balanced",
+    "gemma2-9b-it":            "Gemma 2 9B — Google",
+    "mixtral-8x7b-32768":      "Mixtral 8x7B — large context",
+}
+DEFAULT_ENGINE_MODEL = "llama-3.1-8b-instant"
+METADATA_MODEL       = "llama-3.3-70b-versatile"
+
+_groq = Groq(api_key=settings.groq_api_key) if settings.groq_api_key else None
+
+
+# ── Scenario metadata ─────────────────────────────────────────
+
+async def generate_scenario_metadata(char_name, char_title, char_personality, greeting) -> dict:
+    if not _groq:
+        return {"title": char_name, "brief": char_title, "tags": [], "intensity": 3}
+
+    prompt = (
+        "You are reading a roleplay scenario.\n\n"
+        f"Character: {char_name}\nRole: {char_title}\n"
+        f"Personality: {char_personality}\n\nOpening:\n{greeting}\n\n"
+        "Generate metadata as JSON with exactly these keys:\n"
+        "  title: short evocative display title (3-6 words, no quotes)\n"
+        "  brief: 1-2 sentences — the hook. What will the player walk into?\n"
+        "  tags: array of 3-5 single-word thematic tags from this list:\n"
+        "    drama, power, grief, betrayal, romance, thriller, tension,\n"
+        "    obsession, manipulation, revenge, loyalty, corruption, desire, loss, control\n"
+        "  intensity: integer 1-5 (1=mild, 5=extreme)\n\n"
+        "Output ONLY valid JSON. No markdown. No explanation."
+    )
+    completion = _groq.chat.completions.create(
+        model=METADATA_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=300, temperature=0.2,
+    )
+    raw = completion.choices[0].message.content.strip()
+    try:
+        code_block = re.search(r'```(?:\w+)?\s*([\s\S]*?)```', raw)
+        clean = code_block.group(1).strip() if code_block else raw.strip()
+        start = clean.find("{"); end = clean.rfind("}") + 1
+        return json.loads(clean[start:end])
+    except Exception:
+        return {"title": char_name, "brief": char_title, "tags": [], "intensity": 3}
+
+
+# ── Engine init ───────────────────────────────────────────────
+
+async def engine_init(
+    char_name: str,
+    char_pronouns: str,
+    char_title: str,
+    char_personality: str,
+    greeting: str,
+    player_name: str,
+    player_pronouns: str,
+    engine_model: str = DEFAULT_ENGINE_MODEL,
+    content_filter: str = "off",
+) -> dict:
+    """
+    Initializes the full roleplay engine for a new session.
+    Runs 15-20 Groq calls to build all 7 context layers.
+    Returns serialized engine state ready for Redis storage.
+    """
+    if not settings.groq_api_key:
+        raise RuntimeError("GROQ_API_KEY not set")
+
+    # Point engine's call() at the chosen model
+    init_client(settings.groq_api_key, engine_model)
+
+    # Build content filter object
+    from engine.types import ContentFilter, FilterState
+    cf = ContentFilter(state=FilterState(content_filter))
+
+    scenario = Scenario(
+        char_name=char_name,
+        char_pronouns=char_pronouns,
+        char_title=char_title,
+        char_personality=char_personality,
+        greeting=greeting,
+        player_name=player_name,
+        player_pronouns=player_pronouns,
+        content_filter=cf,
+    )
+
+    # Run the heavy sync engine init in a thread
+    engine = await asyncio.to_thread(scenario_to_engine, scenario)
+    return serialize_engine(engine)
+
+
+# ── Engine prefab (pre-computed at scenario creation) ─────────
+
+async def engine_prefab(
+    char_name: str,
+    char_pronouns: str,
+    char_title: str,
+    char_personality: str,
+    greeting: str,
+) -> dict | None:
+    """
+    Pre-computes all scenario-specific engine layers once at scenario creation.
+    Uses a neutral placeholder persona so the heavy LLM work (layer1, NPC scan,
+    world inference, fact pinning, character inference) is done ahead of time.
+    Result stored in Scenario.prefab_engine_state.
+    At session start, engine_init_from_prefab() patches the actual player in
+    with 1 LLM call instead of 15-20.
+    """
+    if not settings.groq_api_key:
+        return None
+    init_client(settings.groq_api_key, DEFAULT_ENGINE_MODEL)
+    from engine.types import ContentFilter, FilterState
+    scenario = Scenario(
+        char_name=char_name,
+        char_pronouns=char_pronouns,
+        char_title=char_title,
+        char_personality=char_personality,
+        greeting=greeting,
+        player_name='Player',
+        player_pronouns='they/them',
+        content_filter=ContentFilter(state=FilterState.OFF),
+    )
+    engine = await asyncio.to_thread(scenario_to_engine, scenario)
+    return serialize_engine(engine)
+
+
+async def engine_init_from_prefab(
+    prefab_state: dict,
+    player_name: str,
+    player_pronouns: str,
+    greeting: str,
+    engine_model: str = DEFAULT_ENGINE_MODEL,
+    content_filter: str = 'off',
+) -> dict:
+    """
+    Patches a prefab engine state with the actual player persona.
+    Only runs 1 LLM call (player appearance highlights) vs 15-20 for a full init.
+    """
+    import copy
+    from engine.call import call
+    init_client(settings.groq_api_key, engine_model)
+
+    state = copy.deepcopy(prefab_state)
+
+    # Patch player entity name and pronouns
+    for e in state['entities']:
+        if e.get('is_player'):
+            e['name'] = player_name
+            e['pronouns'] = player_pronouns
+            break
+
+    # Rebuild sp_note for the actual player
+    words = greeting.lower().split()
+    is_2p = (words.count('you') + words.count('your') + words.count('yourself')) >= 2
+    state['sp_note'] = (
+        f'IMPORTANT: In the narrative passages of this scene, '
+        f'"you" and "your" refer to {player_name} ({player_pronouns}). '
+        f'In dialogue (inside quotes), "you" refers to whoever the speaker is addressing '
+        f'and must NOT be interpreted as {player_name} unless context makes it clear.\n\n'
+    ) if is_2p else ''
+
+    # Run highlights inference for the actual player (1 LLM call)
+    sp_note = state['sp_note']
+    highlights, _ = await asyncio.to_thread(
+        call,
+        f'{sp_note}'
+        f'Describe the physical appearance of {player_name} ({player_pronouns}) '
+        f'based on what the opening scene states or implies.\n'
+        f'Cover: height, build, hair, face, clothing, emotional state visible on the body.\n'
+        f'2-3 sentences. Concrete and specific.',
+        [{'role': 'user', 'content': greeting}],
+        200,
+        0.2,
+    )
+    for e in state['entities']:
+        if e.get('is_player'):
+            e['appearance'] = highlights
+            break
+
+    # Set content filter and reset session-specific state
+    state['filter_state']    = content_filter
+    state['filter_lock']     = False
+    state['turn']            = 0
+    state['metrics']         = {'turns': 0, 'sv_violations': 0, 'latencies': [], 'compressions': 0}
+    opening_msg              = state['display_history'][0] if state['display_history'] else {'role': 'assistant', 'content': greeting}
+    state['history']         = [opening_msg]
+    state['display_history'] = [opening_msg]
+
+    return state
+
+
+# ── Engine turn ───────────────────────────────────────────────
+
+async def engine_step(
+    engine_state: dict,
+    player_input: str,
+    engine_model: str = DEFAULT_ENGINE_MODEL,
+) -> dict:
+    """
+    Runs one turn through the full engine.
+    Deserializes state from Redis, calls engine.step(), returns
+    updated state + response.
+    """
+    # Re-point call() at the model for this turn
+    init_client(settings.groq_api_key, engine_model)
+
+    engine = deserialize_engine(engine_state)
+    result = await asyncio.to_thread(engine.step, player_input)
+
+    return {
+        "response":    result["response"],
+        "sovereign":   result["sovereign"],
+        "violations":  result["violations"],
+        "turn":        result["turn"],
+        "engine_state": serialize_engine(engine),
+    }
+
+
+# ── Engine turn (streaming) ───────────────────────────────────
+
+async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_ENGINE_MODEL):
+    """Streaming version — yields tokens, then a final metadata dict."""
+    init_client(settings.groq_api_key, engine_model)
+    engine = deserialize_engine(engine_state)
+
+    player_input = sanitize_input(player_input)
+
+    engine.turn += 1
+    engine.metrics['turns'] += 1
+    engine.scene_lang = detect_from_player_input(player_input, engine.scene_lang)
+
+    # translate_input calls sync call() — run in thread to avoid blocking the event loop.
+    english_input = await asyncio.to_thread(translate_input, player_input, engine.scene_lang)
+    parsed = preprocess(english_input, engine.persona, engine.entities, engine.last_target)
+    engine.last_target = parsed['target']
+
+    system = build_system(
+        engine.persona, engine.entities, engine.world,
+        engine.memory, engine.layer1,
+        same_space_risk=parsed['same_space_risk'],
+        scene_lang=engine.scene_lang,
+        content_filter=engine.filter,
+    )
+    msg = parsed['annotated']
+    if parsed['thoughts']:
+        msg += '\n(internal context only, do not reference: ' + ' | '.join(parsed['thoughts']) + ')'
+
+    engine.history.append({'role': 'user', 'content': msg})
+    # display_history stores the clean input (no [SOURCE=PLAYER:...] annotation)
+    if not hasattr(engine, 'display_history'):
+        engine.display_history = []
+    engine.display_history.append({'role': 'user', 'content': parsed['clean']})
+    previous_response = next(
+        (m['content'] for m in reversed(engine.display_history[:-1]) if m.get('role') == 'assistant'),
+        '',
+    )
+
+    hot = engine.history[-MAX_RAW_TURNS:]
+
+    response_en = ""
+    async for token in async_stream_call(system, hot):
+        if token is not None:
+            response_en += token
+        else:
+            break
+
+    # translate_output calls sync call() — run in thread.
+    response = await asyncio.to_thread(translate_output, response_en, engine.scene_lang)
+    response, guard = await asyncio.to_thread(
+        guard_response,
+        response,
+        parsed['clean'],
+        engine.persona,
+        engine.entities,
+        engine.world,
+        engine.memory,
+        engine.layer1,
+        engine.scene_lang,
+        previous_response,
+    )
+    if guard.get('revised'):
+        logger.warning('Continuity guard revised streamed response: %s', guard.get('violations'))
+    sv = check_sovereignty(response, engine.persona.name, engine.entities)
+    if not sv['clean']:
+        engine.metrics['sv_violations'] += sv['count']
+        logger.warning('Sovereignty violation leaked through guard (hard block, stream): %s', sv['violations'])
+        response = 'A tense silence holds. Nothing moves.'
+    for i in range(0, len(response), 24):
+        yield {"type": "token", "content": response[i:i + 24]}
+
+    engine.history.append({'role': 'assistant', 'content': response})
+    engine.display_history.append({'role': 'assistant', 'content': response})
+
+    extract_and_save_assumptions(response, engine.persona, engine.entities, lock=engine._lock)
+    if len(engine.history) > MAX_RAW_TURNS:
+        chunk = engine.history[:-MAX_RAW_TURNS]
+        summarize_async(chunk, engine.persona.name, engine.memory)
+        engine.history = engine.history[-MAX_RAW_TURNS:]
+        engine.metrics['compressions'] += 1
+
+    yield {
+        "type": "done",
+        "response": response,
+        "session_id": None,  # caller fills this
+        "turn": engine.turn,
+        "sovereign": sv['clean'],
+        "violations": sv['violations'],
+        "engine_state": serialize_engine(engine),
+    }

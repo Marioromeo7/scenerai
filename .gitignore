@@ -1,0 +1,48 @@
+# Secrets — never commit
+.env
+backend.env
+postgres.env
+redis.env
+
+# Database dumps
+*.sql
+*.dump
+
+# Test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+.npm/
+
+# Build output
+frontend/dist/
+frontend/app/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
