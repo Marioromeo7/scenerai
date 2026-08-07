@@ -1,6 +1,19 @@
 # Scenarai
 
-AI-powered interactive fiction platform. Create a character, publish a scenario, then play it as your persona in a multi-turn narrative session powered by LLaMA/Gemma/Mixtral via Groq.
+An AI interactive-fiction platform where the hard problem is cost, not storytelling.
+
+**A naive implementation spends 15–20 LLM calls assembling narrative context before a player
+turn can even begin. Scenarai spends 1.** Seven context layers — world state, entity registry,
+behavioural reads, pinned facts — are pre-computed once at publish time and stored as a
+`prefab_engine_state`. Starting a session patches the player's persona into that prefab in a
+single call instead of rebuilding everything from scratch.
+
+That is the whole design. Everything else follows from it.
+
+- **178 tests** across the engine, guards, serializer, and async helpers
+- Async FastAPI + SQLAlchemy, PostgreSQL, Redis, Nginx, Docker Compose, Alembic migrations
+- A continuity guard and per-character **sovereignty check** on every turn, so characters
+  can't reference knowledge they were never given
 
 ## Stack
 
