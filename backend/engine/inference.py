@@ -1,6 +1,6 @@
 import re
 import json
-import threading
+import difflib
 import unicodedata
 import contextvars
 import concurrent.futures
@@ -198,7 +198,15 @@ def _substitute_names(text, entities):
 # ── Character inference ───────────────────────────────────────
 
 def _infer_single_npc(e, entities, opening_copy, layer1_copy, sp_note):
-    """Infer behavioral read, never_does, and appearance for one NPC. Thread-safe."""
+    """Infer behavioral read, never_does, and appearance for one NPC. Thread-safe.
+    Never raises — a classification failure for one NPC must not abort init for the others."""
+    try:
+        _infer_single_npc_unsafe(e, entities, opening_copy, layer1_copy, sp_note)
+    except Exception as exc:
+        logger.warning(f'NPC inference failed for {e.name}, continuing with partial/default fields: {exc}')
+
+
+def _infer_single_npc_unsafe(e, entities, opening_copy, layer1_copy, sp_note):
     entity_context = (
         f'Name: {e.name}\n'
         f'Pronouns: {e.pronouns}\n'
@@ -382,39 +390,53 @@ def scan_opening_for_npcs(opening, layer1, entities, sp_note='', char_personalit
         if not raw_name or raw_name.lower() in existing:
             continue
 
-        if _is_collective_group(raw_name, combined):
-            role = _infer_collective_role(raw_name, combined)
-            npc  = Entity(
-                name=raw_name, pronouns='they/them', role=role,
-                is_collective=True,
-            )
-            entities.append(npc)
-            existing.add(raw_name.lower())
-            logger.info(f'NPC {raw_name} (they/them) — collective: {role[:80]}')
-        else:
-            is_role = _is_role_descriptor(raw_name, combined)
-            if is_role:
-                name = _generate_npc_name(raw_name, combined)
-                # Guard: generated name must not collide with an already-known entity.
-                if name.lower() in existing:
-                    logger.info(f'Skipping role "{raw_name}" — generated name "{name}" matches known entity')
-                    continue
-                logger.info(f'NPC Role "{raw_name}" named "{name}" from context')
+        try:
+            if _is_collective_group(raw_name, combined):
+                role = _infer_collective_role(raw_name, combined)
+                npc  = Entity(
+                    name=raw_name, pronouns='they/them', role=role,
+                    is_collective=True,
+                )
+                entities.append(npc)
+                existing.add(raw_name.lower())
+                logger.info(f'NPC {raw_name} (they/them) — collective: {role[:80]}')
             else:
-                name = raw_name
+                is_role = _is_role_descriptor(raw_name, combined)
+                if is_role:
+                    name = _generate_npc_name(raw_name, combined)
+                    # Guard: generated name must not collide with an already-known entity.
+                    if name.lower() in existing:
+                        logger.info(f'Skipping role "{raw_name}" — generated name "{name}" matches known entity')
+                        continue
+                    logger.info(f'NPC Role "{raw_name}" named "{name}" from context')
+                else:
+                    name = raw_name
 
-            pronouns = _extract_pronouns(
-                raw_name if is_role else name,
-                combined
-            )
-            npc = Entity(
-                name=name,
-                pronouns=pronouns,
-                role=raw_name if is_role else '',
-            )
-            entities.append(npc)
-            existing.add(name.lower())
-            logger.info(f'NPC {name} ({pronouns}) — {raw_name}')
+                # _extract_pronouns is the classification call most likely to fail in
+                # practice — isolate it so a failure here still falls back to they/them
+                # instead of dropping this NPC (or aborting the whole scan) entirely.
+                try:
+                    pronouns = _extract_pronouns(raw_name if is_role else name, combined)
+                except Exception as exc:
+                    logger.warning(f'Pronoun inference failed for "{name}", defaulting to they/them: {exc}')
+                    pronouns = 'they/them'
+
+                npc = Entity(
+                    name=name,
+                    pronouns=pronouns,
+                    role=raw_name if is_role else '',
+                )
+                entities.append(npc)
+                existing.add(name.lower())
+                logger.info(f'NPC {name} ({pronouns}) — {raw_name}')
+        except Exception as exc:
+            # Any other classification call (_is_collective_group, _is_role_descriptor,
+            # _generate_npc_name) failing must not abort the scan for the remaining
+            # candidates — fall back to treating this candidate as an individual NPC.
+            logger.warning(f'NPC classification failed for "{raw_name}", defaulting to individual NPC: {exc}')
+            if raw_name.lower() not in existing:
+                entities.append(Entity(name=raw_name, pronouns='they/them', role=''))
+                existing.add(raw_name.lower())
 
 
 def _extract_pronouns(search_term, context):
@@ -533,6 +555,32 @@ def preprocess(raw, persona, entities, last_target=None):
 
 # ── System prompt ─────────────────────────────────────────────
 
+def _integrity_band(resolve: float) -> tuple:
+    """Qualitative read of an eroding integrity_resolve — how tight the rope
+    still is. Shared by build_system (generation) and guard_response
+    (validation) so both judge a boundary crossing the same way."""
+    if resolve >= 0.71:
+        return 'INTACT', 'This boundary is rigid. They would resist or refuse outright.'
+    if resolve >= 0.41:
+        return (
+            'TESTED',
+            'This boundary is being tested. Cracks may show — hesitation, a flicker of '
+            'doubt — but it still holds under normal pressure. It should not break here '
+            'without real emotional weight behind the moment.'
+        )
+    if resolve >= 0.11:
+        return (
+            'WORN',
+            'This boundary is worn thin. A well-earned, emotionally weighted push could '
+            'tip it now. Written hesitation before any crossing is expected, not silence.'
+        )
+    return (
+        'BROKEN',
+        'This boundary no longer holds. Crossing it now is a legitimate, earned turning '
+        'point in the story, not a violation — write it as one.'
+    )
+
+
 def build_system(persona, entities, world, memory, layer1,
                  same_space_risk=False, scene_lang='English', content_filter=None):
     registry  = '\n\n'.join(e.block() for e in entities)
@@ -545,9 +593,12 @@ def build_system(persona, entities, world, memory, layer1,
     CHARACTER_INTEGRITY = ''
     for e in entities:
         if not e.is_player and e.never_does:
+            label, guidance = _integrity_band(e.integrity_resolve)
+            erosion = f'\n    Recent erosion: {"; ".join(e.integrity_notes[-3:])}' if e.integrity_notes else ''
             CHARACTER_INTEGRITY += (
                 f'\n  {e.name} — CHARACTER INTEGRITY:\n'
                 f'    {e.never_does}\n'
+                f'    Resolve: {label} ({e.integrity_resolve * 100:.0f}%) — {guidance}{erosion}\n'
                 f'    Behavioral truth: {e.behavioral_read[:200] if e.behavioral_read else ""}\n'
             )
 
@@ -676,8 +727,13 @@ def check_sovereignty(response: str, persona_name: str, entities: list = None) -
         is_clean   = bool(data.get('clean', True))
         return {'clean': is_clean, 'violations': violations, 'count': len(violations)}
     except Exception as e:
-        logger.warning('Sovereignty check failed, assuming clean: %s', e)
-        return {'clean': True, 'violations': [], 'count': 0}
+        # Fail CLOSED, matching guard_response's continuity validator — this is
+        # meant to be the hard-block last line of defense against sovereignty
+        # violations leaking through. A parse/call failure here must not
+        # silently ship an unreviewed response; found live via the judge
+        # harness (Section 2) hitting a malformed validator response.
+        logger.warning('Sovereignty check failed — failing closed (treating as a violation): %s', e)
+        return {'clean': False, 'violations': ['sovereignty check itself failed — failing closed'], 'count': 1}
 
 
 def _parse_guard_verdict(raw):
@@ -698,14 +754,39 @@ def _same_raw_response(a, b):
     return ' '.join((a or '').split()).lower() == ' '.join((b or '').split()).lower()
 
 
+def _similar_response(a, b, threshold=0.75):
+    """Broader than _same_raw_response — catches a repair/fallback that reuses
+    most of the previous turn's text with a sentence swapped or tacked on.
+    An exact-match check misses this entirely: in production, a repair pass
+    reused an entire prior paragraph verbatim and just appended a refusal
+    sentence, and _same_raw_response saw that as a different response.
+    threshold is a guessed starting point, not empirically tuned."""
+    if _same_raw_response(a, b):
+        return True
+    na = ' '.join((a or '').split()).lower()
+    nb = ' '.join((b or '').split()).lower()
+    if not na or not nb:
+        return False
+    return difflib.SequenceMatcher(None, na, nb).ratio() >= threshold
+
+
 def guard_response(response, player_input, persona, entities, world, memory, layer1,
                    scene_lang='English', previous_response=''):
     """Validate and, once, repair an assistant response before it is saved or shown."""
     pinned = '\n'.join(f'- {fact}' for fact in memory.pinned) or '- none'
     entity_block = '\n\n'.join(e.block() for e in entities)
+
+    def _integrity_line(e):
+        if not e.never_does:
+            return f'- {e.name}: {e.behavioral_read[:300]}'
+        label, _ = _integrity_band(e.integrity_resolve)
+        return (
+            f'- {e.name}: "{e.never_does}" — resolve {label} ({e.integrity_resolve * 100:.0f}%). '
+            f'{e.behavioral_read[:300]}'
+        )
+
     integrity = '\n'.join(
-        f'- {e.name}: {e.never_does} {e.behavioral_read[:300]}'
-        for e in entities
+        _integrity_line(e) for e in entities
         if not e.is_player and (e.never_does or e.behavioral_read)
     ) or '- none'
 
@@ -713,22 +794,32 @@ def guard_response(response, player_input, persona, entities, world, memory, lay
         'You are a strict continuity and safety validator for an interactive fiction engine. '
         'Check whether the assistant draft violates any pinned fact, world state, character '
         'integrity rule, physical possibility, knowledge boundary, or player agency rule. '
-        'A character must not reveal knowledge they do not have, perform impossible actions, '
-        'or directly do the one thing their integrity rule says they would never do. '
+        'A character must not reveal knowledge they do not have or perform impossible actions. '
+        'Each character integrity line below carries a resolve label (INTACT/TESTED/WORN/BROKEN) — '
+        'this is how much that boundary has eroded through the story\'s own emotional events, not '
+        'through player argument. Judge a crossing of "would never" against that label: '
+        'INTACT — any crossing is a violation. TESTED — a crossing is a violation unless the draft '
+        'itself shows real hesitation or weight before it. WORN — a crossing with visible hesitation '
+        'or earned emotional buildup is NOT a violation. BROKEN — crossing it is the earned point of '
+        'the scene, never a violation. A boundary abruptly abandoned with no felt resistance at all is '
+        'always a violation regardless of resolve. '
         'The narrator must never move, feel, think, decide, or speak for the player. '
         'Return ONLY valid JSON with keys: valid (boolean), violations (array of short strings).'
     )
-    validator_payload = (
-        f'PLAYER: {persona.name} ({persona.pronouns})\n'
-        f'SCENE LANGUAGE: {scene_lang}\n\n'
-        f'LAYER 1 GROUND TRUTH:\n{layer1}\n\n'
-        f'WORLD STATE:\n{world.block()}\n\n'
-        f'PINNED FACTS:\n{pinned}\n\n'
-        f'ENTITIES:\n{entity_block}\n\n'
-        f'CHARACTER INTEGRITY:\n{integrity}\n\n'
-        f'PLAYER INPUT:\n{player_input}\n\n'
-        f'ASSISTANT DRAFT:\n{response}'
-    )
+    def _build_validator_payload(draft):
+        return (
+            f'PLAYER: {persona.name} ({persona.pronouns})\n'
+            f'SCENE LANGUAGE: {scene_lang}\n\n'
+            f'LAYER 1 GROUND TRUTH:\n{layer1}\n\n'
+            f'WORLD STATE:\n{world.block()}\n\n'
+            f'PINNED FACTS:\n{pinned}\n\n'
+            f'ENTITIES:\n{entity_block}\n\n'
+            f'CHARACTER INTEGRITY:\n{integrity}\n\n'
+            f'PLAYER INPUT:\n{player_input}\n\n'
+            f'ASSISTANT DRAFT:\n{draft}'
+        )
+
+    validator_payload = _build_validator_payload(response)
 
     violations = []
     sv = check_sovereignty(response, persona.name, entities)
@@ -775,12 +866,15 @@ def guard_response(response, player_input, persona, entities, world, memory, lay
             retries=2,
         )
         revised = revised.strip()
-        revised_payload = validator_payload.replace(
-            f'ASSISTANT DRAFT:\n{response}',
-            f'ASSISTANT DRAFT:\n{revised}',
-        )
+        revised_payload = _build_validator_payload(revised)
         revised_sv = check_sovereignty(revised, persona.name, entities)
         revised_violations = [f'player agency violation: {revised_sv["violations"]}'] if not revised_sv['clean'] else []
+        # A repair that reuses most of the previous turn's text (e.g. "preserve the
+        # useful dramatic beat" taken too literally) currently passes continuity/
+        # sovereignty re-validation cleanly and would otherwise ship as-is. Route
+        # it through the same fallback escalation as a real violation instead.
+        if previous_response and _similar_response(revised, previous_response):
+            revised_violations.append('repair reused the previous turn\'s response almost verbatim')
         try:
             revised_raw, _ = call(
                 validator_system,
@@ -820,10 +914,10 @@ def guard_response(response, player_input, persona, entities, world, memory, lay
                     retries=2,
                 )
                 fallback = fallback.strip()
-                if previous_response and _same_raw_response(fallback, previous_response):
+                if previous_response and _similar_response(fallback, previous_response):
                     try:
                         fallback_retry, _ = call(
-                            fallback_system + ' The last attempt exactly repeated the previous response. Produce a different response now.',
+                            fallback_system + ' The last attempt repeated most of the previous response. Produce a genuinely different response now.',
                             [{'role': 'user', 'content': fallback_payload}],
                             max_tokens=260,
                             temp=0.9,
@@ -832,7 +926,7 @@ def guard_response(response, player_input, persona, entities, world, memory, lay
                         fallback = fallback_retry.strip() or fallback
                     except Exception:
                         pass
-                if previous_response and _same_raw_response(fallback, previous_response):
+                if previous_response and _similar_response(fallback, previous_response):
                     fallback = f'A quiet pause settles before the refusal changes shape. {fallback}'
             except Exception as e:
                 logger.warning('Continuity fallback call failed: %s', e)
@@ -869,78 +963,151 @@ def sanitize_input(text: str) -> str:
     return text.strip()
 
 
-# ── Async memory helpers ──────────────────────────────────────
+# ── Memory helpers ─────────────────────────────────────────────
 
-def summarize_async(chunk, persona_name, memory):
-    def _run():
-        try:
-            chunk_text = '\n'.join(f'{m["role"].upper()}: {m["content"]}' for m in chunk)
+def summarize_chunk(chunk, persona_name, memory):
+    """Compress a trimmed history chunk into memory.summaries.
+    Runs synchronously and must complete (or fail closed) before the caller
+    proceeds — history is truncated by the caller right after this returns,
+    so a summary that doesn't land here means that chunk's content is gone
+    with no recovery path. Previously fire-and-forget on a daemon thread;
+    that thread almost always lost the race against serialize_engine()
+    running immediately after step() returned, silently discarding the
+    summary while the truncation had already happened — real data loss."""
+    try:
+        chunk_text = '\n'.join(f'{m["role"].upper()}: {m["content"]}' for m in chunk)
+        summary, _ = call(
+            'Precise narrative summarizer. Output ONLY the summary. '
+            'Preserve emotional texture, key events, relationship shifts, facts.',
+            [{'role': 'user', 'content': f'Summarize in 3-4 sentences:\n\n{chunk_text}'}],
+            max_tokens=200, temp=0.3
+        )
+        beats, _ = call(
+            'Output only a comma-separated list of 3 key emotional facts. Nothing else.',
+            [{'role': 'user', 'content': chunk_text}],
+            max_tokens=60, temp=0.1
+        )
+        check, _ = call(
+            'Answer YES or NO only.',
+            [{'role': 'user', 'content': f'Does this summary preserve: {beats}?\n\nSummary: {summary}'}],
+            max_tokens=5, temp=0.1
+        )
+        if 'no' in check.lower():
             summary, _ = call(
-                'Precise narrative summarizer. Output ONLY the summary. '
-                'Preserve emotional texture, key events, relationship shifts, facts.',
-                [{'role': 'user', 'content': f'Summarize in 3-4 sentences:\n\n{chunk_text}'}],
+                'Precise narrative summarizer. Output ONLY the summary.',
+                [{'role': 'user', 'content':
+                    f'Summarize in 3-4 sentences. Must preserve: {beats}\n\n{chunk_text}'}],
                 max_tokens=200, temp=0.3
             )
-            beats, _ = call(
-                'Output only a comma-separated list of 3 key emotional facts. Nothing else.',
-                [{'role': 'user', 'content': chunk_text}],
-                max_tokens=60, temp=0.1
-            )
-            check, _ = call(
-                'Answer YES or NO only.',
-                [{'role': 'user', 'content': f'Does this summary preserve: {beats}?\n\nSummary: {summary}'}],
-                max_tokens=5, temp=0.1
-            )
-            if 'no' in check.lower():
-                summary, _ = call(
-                    'Precise narrative summarizer. Output ONLY the summary.',
-                    [{'role': 'user', 'content':
-                        f'Summarize in 3-4 sentences. Must preserve: {beats}\n\n{chunk_text}'}],
-                    max_tokens=200, temp=0.3
-                )
-            memory.summaries.append(summary)
-            logger.info(f'Summary: {summary[:70]}...')
-        except Exception as e:
-            logger.warning('summarize_async failed: %s', e)
-    threading.Thread(target=contextvars.copy_context().run, args=(_run,), daemon=True).start()
+        memory.summaries.append(summary)
+        logger.info(f'Summary: {summary[:70]}...')
+    except Exception as e:
+        logger.warning('summarize_chunk failed — this history chunk is lost with no summary: %s', e)
+
+
+def _norm_lookup(d):
+    """Case/whitespace-insensitive view of a {name: value} dict, so a model
+    rephrasing "Iris Vale" as "iris vale" or "Iris" doesn't silently drop
+    the entry — same fuzziness for stable/physical/resolve_shift lookups."""
+    return {str(k).strip().lower(): v for k, v in (d or {}).items()}
+
+
+def _apply_resolve_shifts(entities, shifts, lock=None):
+    """Erode (never tighten) an entity's integrity_resolve based on model-reported
+    emotional impact. Delta is clamped here regardless of what the model returns —
+    the loosening must be gradual and one-directional, a rope worn down by
+    behaviour, not a rule that can be argued open in one turn."""
+    shifts_by_name = _norm_lookup(shifts)
+    known_names = {e.name.strip().lower() for e in entities}
+
+    def _apply():
+        for e in entities:
+            shift = shifts_by_name.get(e.name.strip().lower())
+            if not shift or not e.never_does:
+                continue
+            try:
+                delta = float(shift.get('delta', 0))
+            except (TypeError, ValueError):
+                continue
+            delta = max(-0.2, min(0.0, delta))  # negative-only, capped per turn
+            if delta == 0.0:
+                continue
+            e.integrity_resolve = max(0.0, round(e.integrity_resolve + delta, 3))
+            reason = str(shift.get('reason', ''))[:120]
+            if reason:
+                e.integrity_notes.append(reason)
+                del e.integrity_notes[:-5]  # keep only the last 5
+            logger.info(f'{e.name} integrity_resolve -> {e.integrity_resolve:.2f} ({reason})')
+        unknown = set(shifts_by_name) - known_names
+        if unknown:
+            logger.warning(f'resolve_shift named characters that match no entity at all: {unknown}')
+    if lock:
+        with lock:
+            _apply()
+    else:
+        _apply()
 
 
 def extract_and_save_assumptions(response, persona, entities, lock=None):
-    def _run():
-        all_names = [e.name for e in entities]
-        try:
-            result, _ = call(
-                'Extract character state changes from narrative text. '
-                'Output JSON only: {"stable": {"name": ["detail"]}, "physical": {"name": "state"}}. '
-                'Stable = appearance, clothing, permanent traits. '
-                'Physical = injuries, blood, torn clothing, exhaustion. '
-                'Only include characters with changes. Output valid JSON only.',
-                [{'role': 'user', 'content': (
-                    f'Characters: {", ".join(all_names)}\n\n'
-                    f'Narrative:\n{response}'
-                )}],
-                max_tokens=150, temp=0.1
-            )
-            code_block = re.search(r'```(?:\w+)?\s*([\s\S]*?)```', result)
-            clean = code_block.group(1).strip() if code_block else result.strip()
-            data  = json.loads(clean)
+    """Extract stable/physical state changes (and, for NPCs with a tracked
+    integrity boundary, resolve erosion) from the turn's narrative text.
+    Runs synchronously and must complete before the caller's serialize_engine()
+    — previously fire-and-forget on a daemon thread, which meant these
+    mutations almost always lost the race against serialization and were
+    silently discarded every turn. See summarize_chunk for the same fix."""
+    all_names = [e.name for e in entities]
+    tracked = [e for e in entities if not e.is_player and not e.is_collective and e.never_does]
+    boundary_block = '\n'.join(
+        f'  {e.name} — "{e.never_does}" (currently {e.integrity_resolve * 100:.0f}% intact)'
+        for e in tracked
+    )
+    boundary_instruction = (
+        '\n\nTracked boundaries — assess ONLY these characters, only if listed:\n'
+        f'{boundary_block}\n'
+        'For each, did this turn show them emotionally affected in a way that would ease '
+        '(loosen) their resolve about that boundary — vulnerability shown, trust extended, '
+        'fear overcome, a genuine moment of connection? This is about behaviour and feeling, '
+        'not persuasion or argument. If yes, add to resolve_shift: a delta between -0.03 and '
+        '-0.2 (larger only for a major emotional turn) and a short reason under 12 words. '
+        'If no visible emotional effect, omit that character entirely. Never a positive delta.'
+    ) if tracked else ''
+    try:
+        result, _ = call(
+            'Extract character state changes from narrative text. '
+            'Output JSON only: {"stable": {"name": ["detail"]}, "physical": {"name": "state"}'
+            + (', "resolve_shift": {"name": {"delta": -0.1, "reason": "..."}}' if tracked else '')
+            + '}. '
+            'Stable = appearance, clothing, permanent traits. '
+            'Physical = injuries, blood, torn clothing, exhaustion. '
+            'Only include characters with changes. Output valid JSON only.'
+            + boundary_instruction,
+            [{'role': 'user', 'content': (
+                f'Characters: {", ".join(all_names)}\n\n'
+                f'Narrative:\n{response}'
+            )}],
+            max_tokens=320, temp=0.1  # room for stable+physical+resolve_shift across several NPCs
+        )
+        code_block = re.search(r'```(?:\w+)?\s*([\s\S]*?)```', result)
+        clean = code_block.group(1).strip() if code_block else result.strip()
+        data  = json.loads(clean)
+        stable   = _norm_lookup(data.get('stable'))
+        physical = _norm_lookup(data.get('physical'))
+
+        def _apply():
             for e in entities:
-                n = e.name
-                if lock:
-                    with lock:
-                        if n in data.get('stable', {}):
-                            for detail in data['stable'][n]:
-                                if detail not in e.saved_assumptions:
-                                    e.saved_assumptions.append(detail)
-                        if n in data.get('physical', {}):
-                            e.physical_state = data['physical'][n]
-                else:
-                    if n in data.get('stable', {}):
-                        for detail in data['stable'][n]:
-                            if detail not in e.saved_assumptions:
-                                e.saved_assumptions.append(detail)
-                    if n in data.get('physical', {}):
-                        e.physical_state = data['physical'][n]
-        except Exception:
-            pass
-    threading.Thread(target=contextvars.copy_context().run, args=(_run,), daemon=True).start()
+                key = e.name.strip().lower()
+                if key in stable:
+                    for detail in stable[key]:
+                        if detail not in e.saved_assumptions:
+                            e.saved_assumptions.append(detail)
+                if key in physical:
+                    e.physical_state = physical[key]
+        if lock:
+            with lock:
+                _apply()
+        else:
+            _apply()
+        if tracked and data.get('resolve_shift'):
+            _apply_resolve_shifts(entities, data['resolve_shift'], lock=lock)
+    except Exception as e:
+        logger.warning(f'extract_and_save_assumptions failed, turn state enrichment skipped: {e}')

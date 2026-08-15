@@ -1,0 +1,253 @@
+{
+  "B2": {
+    "tier": "B2",
+    "prompt": "long silver hair character on the left, wearing a green cloak, short black hair character on the right, wearing a red tunic, in a torch-lit stone corridor, digital painting, two main characters",
+    "num_chains": 20,
+    "max_retries": 5,
+    "success_count": 0,
+    "success_rate": 0.0,
+    "avg_tries_on_success": null,
+    "chains": [
+      {
+        "id": 0,
+        "seed_cursor": 5,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "white",
+          "hair_right": "white"
+        }
+      },
+      {
+        "id": 1,
+        "seed_cursor": 1005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "blonde",
+          "hair_right": "blonde"
+        }
+      },
+      {
+        "id": 2,
+        "seed_cursor": 2005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 3,
+        "seed_cursor": 3005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "1",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 4,
+        "seed_cursor": 4005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "red",
+          "hair_right": "red"
+        }
+      },
+      {
+        "id": 5,
+        "seed_cursor": 5005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 6,
+        "seed_cursor": 6005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "1",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 7,
+        "seed_cursor": 7005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "white",
+          "hair_right": "white"
+        }
+      },
+      {
+        "id": 8,
+        "seed_cursor": 8005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 9,
+        "seed_cursor": 9005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 10,
+        "seed_cursor": 10005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "white",
+          "hair_right": "white"
+        }
+      },
+      {
+        "id": 11,
+        "seed_cursor": 11005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 12,
+        "seed_cursor": 12005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "blue",
+          "hair_right": "blue"
+        }
+      },
+      {
+        "id": 13,
+        "seed_cursor": 13005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 14,
+        "seed_cursor": 14005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 15,
+        "seed_cursor": 15005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "white",
+          "hair_right": "white"
+        }
+      },
+      {
+        "id": 16,
+        "seed_cursor": 16005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      },
+      {
+        "id": 17,
+        "seed_cursor": 17005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "gray",
+          "hair_right": "gray"
+        }
+      },
+      {
+        "id": 18,
+        "seed_cursor": 18005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "1",
+          "hair_left": "white",
+          "hair_right": "white"
+        }
+      },
+      {
+        "id": 19,
+        "seed_cursor": 19005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "person_count": "2",
+          "hair_left": "black",
+          "hair_right": "black"
+        }
+      }
+    ]
+  }
+}

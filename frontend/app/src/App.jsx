@@ -241,8 +241,108 @@ function InitializingScreen({ charName }) {
 }
 
 // ── Chat bubble with streaming cursor ─────────────────────────
-function Bubble({ msg, charName, charInit, personaName, personaInit }) {
+// Turn feedback rating — helpful signal for future quality work (complements
+// the offline judge harness in judge/ with real user feedback, not just
+// scripted golden scenarios). 1-5 stars, upserts via api.rateTurn.
+function RatingStars({ sessionId, turn }) {
+  const [rating, setRating]   = useState(null)
+  const [hover, setHover]     = useState(0)
+  const [saving, setSaving]   = useState(false)
+
+  if (!sessionId || !turn) return null
+
+  async function rate(value) {
+    if (saving) return
+    const prev = rating
+    setRating(value) // optimistic
+    setSaving(true)
+    try {
+      await api.rateTurn(sessionId, turn, value)
+    } catch (e) {
+      console.error(e)
+      setRating(prev)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{display:'flex',gap:2,marginTop:4,alignItems:'center'}} title="Rate this turn">
+      {[1,2,3,4,5].map(n => (
+        <span key={n}
+          onClick={() => rate(n)}
+          onMouseEnter={() => setHover(n)}
+          onMouseLeave={() => setHover(0)}
+          style={{
+            cursor:'pointer', fontSize:13, lineHeight:1,
+            color: n <= (hover || rating || 0) ? 'var(--accent)' : 'var(--text-muted)',
+            opacity: n <= (hover || rating || 0) ? 1 : 0.4,
+            transition:'color .1s, opacity .1s',
+          }}
+        >★</span>
+      ))}
+      {rating && <span style={{fontSize:10,color:'var(--text-muted)',marginLeft:4}}>rated</span>}
+    </div>
+  )
+}
+
+// Per-turn generated video segment (image + narration baked in by the
+// worker's bridge pipeline) shown inside an assistant bubble. Reuses the
+// single stitched mp4 for both the static "scene image" and the narration
+// audio rather than wiring up separate <img>/<audio> elements.
+function TurnMediaCard({ media, muted, isLast, onRegenerate, regenerating }) {
+  if (!media) return null
+  if (media.status === 'pending') {
+    return (
+      <div style={{fontSize:11,color:'var(--text-muted)',fontStyle:'italic',margin:'2px 0 6px'}}>
+        Generating scene…
+      </div>
+    )
+  }
+  if (media.status === 'failed') {
+    return (
+      <div style={{fontSize:11,color:'var(--danger)',margin:'2px 0 6px',display:'flex',alignItems:'center',gap:8}}>
+        <span>Scene generation failed{media.error ? `: ${media.error}` : ''}</span>
+        {isLast && onRegenerate && (
+          <button onClick={onRegenerate} disabled={regenerating}
+            style={{background:'none',border:'none',color:'var(--danger)',textDecoration:'underline',
+              cursor:regenerating?'default':'pointer',fontSize:11,padding:0,opacity:regenerating?0.5:1}}>
+            {regenerating ? 'retrying…' : 'retry'}
+          </button>
+        )}
+      </div>
+    )
+  }
+  if (media.status !== 'ready' || !media.video_segment_url) return null
+  return (
+    <div style={{position:'relative',borderRadius:14,overflow:'hidden',marginBottom:6,border:'1px solid var(--border)',background:'#000'}}>
+      <video
+        src={media.video_segment_url}
+        muted={muted}
+        autoPlay={isLast}
+        controls
+        playsInline
+        style={{display:'block',width:'100%',maxHeight:360}}
+      />
+      {isLast && onRegenerate && (
+        <button onClick={onRegenerate} disabled={regenerating}
+          title="Not happy with this scene? Regenerate it"
+          style={{
+            position:'absolute',top:8,right:8,width:26,height:26,borderRadius:'50%',
+            background:'rgba(0,0,0,0.55)',border:'1px solid rgba(255,255,255,0.25)',
+            color:'#fff',fontSize:14,lineHeight:1,cursor:regenerating?'default':'pointer',
+            display:'flex',alignItems:'center',justifyContent:'center',
+            opacity:regenerating?0.5:0.9,
+          }}
+        >{regenerating ? '…' : '⋯'}</button>
+      )}
+    </div>
+  )
+}
+
+function Bubble({ msg, charName, charInit, personaName, personaInit, sessionId, isLast, onRegenerate, regenerating, media, muted, onRegenerateMedia, regeneratingMedia }) {
   const isUser = msg.role === 'user'
+  const hasImage = !isUser && media?.status === 'ready' && media.video_segment_url
   return (
     <div style={{display:'flex',flexDirection:isUser?'row-reverse':'row',alignItems:'flex-end',gap:10,margin:'12px 0'}}>
       <div style={{
@@ -257,12 +357,18 @@ function Bubble({ msg, charName, charInit, personaName, personaInit }) {
         <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4,
           textAlign:isUser?'right':'left',letterSpacing:'.04em'}}>
           {isUser?personaName:charName}
+          {msg.isContinuation && <span style={{fontStyle:'italic',opacity:.7}}> · continued</span>}
         </div>
+        {!isUser && (
+          <TurnMediaCard media={media} muted={muted} isLast={isLast}
+            onRegenerate={onRegenerateMedia} regenerating={regeneratingMedia}/>
+        )}
         <div style={{
           padding:'11px 15px',
           borderRadius:isUser?'18px 18px 4px 18px':'18px 18px 18px 4px',
-          background:isUser?'var(--accent-dim)':'var(--bg-card)',
+          background:isUser?'var(--accent-dim)':(hasImage?'rgba(26,26,30,0.6)':'var(--bg-card)'),
           border:`1px solid ${isUser?'rgba(201,169,110,0.3)':'var(--border)'}`,
+          backdropFilter:hasImage?'blur(6px)':undefined,
           fontSize:14,lineHeight:1.65,color:'var(--text-primary)',
           fontFamily:isUser?'var(--font-body)':'var(--font-display)',
           whiteSpace:'pre-wrap',
@@ -275,7 +381,149 @@ function Bubble({ msg, charName, charInit, personaName, personaInit }) {
         {msg.role==='assistant'&&!msg.sovereign&&!msg.streaming&&(
           <div style={{fontSize:10,color:'var(--danger)',marginTop:4,opacity:.6}}>⚠ sovereignty flag</div>
         )}
+        {msg.role==='assistant'&&!msg.streaming&&(
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <RatingStars sessionId={sessionId} turn={msg.turn}/>
+            {/* Only on the most recent reply — a single generation coming out
+                wrong doesn't mean the whole turn was wrong, try again
+                (SpicyChat-style "regenerate"). Regenerating an older message
+                would desync it from turns that already followed it. */}
+            {isLast && onRegenerate && (
+              <button onClick={onRegenerate} disabled={regenerating}
+                title="Discard this reply and try again"
+                style={{
+                  background:'none',border:'none',cursor:regenerating?'default':'pointer',
+                  color:'var(--text-muted)',fontSize:10,letterSpacing:'.04em',
+                  textDecoration:'underline',opacity:regenerating?0.4:0.7,padding:0,
+                }}
+              >
+                {regenerating ? 'regenerating…' : '↻ regenerate'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+// Sequences ready per-turn video segments as a playlist -- true server-side
+// live-concat into one continuously growing file is a documented follow-up
+// (see worker.py's generate_turn_media_job docstring); this plays the same
+// per-turn segments back-to-back client-side instead, auto-advancing as
+// each one ends.
+function MoviePlayer({ turnMedia, messages, muted, charName, sessionId }) {
+  const ready = Object.values(turnMedia)
+    .filter(m => m.status === 'ready' && m.video_segment_url)
+    .sort((a, b) => a.turn - b.turn)
+  const [idx, setIdx] = useState(0)
+  const videoRef = useRef()
+  const clampedIdx = Math.min(idx, Math.max(0, ready.length - 1))
+
+  const [exportFrom, setExportFrom] = useState('')
+  const [exportTo, setExportTo]     = useState('')
+  const [exporting, setExporting]   = useState(false)
+  const [exportResult, setExportResult] = useState(null)
+  const [exportError, setExportError]   = useState(null)
+
+  useEffect(() => {
+    if (ready.length > 0 && exportFrom === '') {
+      setExportFrom(String(ready[0].turn))
+      setExportTo(String(ready[ready.length - 1].turn))
+    }
+  }, [ready.length])
+
+  async function doExport() {
+    if (!sessionId || exportFrom === '' || exportTo === '' || exporting) return
+    setExporting(true); setExportError(null); setExportResult(null)
+    try {
+      const res = await api.exportSessionVideo(sessionId, Number(exportFrom), Number(exportTo))
+      setExportResult(res)
+    } catch (err) {
+      setExportError(err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  useEffect(() => {
+    videoRef.current?.play().catch(() => {})
+  }, [clampedIdx, ready[clampedIdx]?.video_segment_url])
+
+  if (ready.length === 0) {
+    return (
+      <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:48}}>
+        <div style={{textAlign:'center',color:'var(--text-muted)'}}>
+          <div style={{fontSize:36,opacity:.5,marginBottom:8}}>🎬</div>
+          <div style={{fontSize:13}}>No scenes generated yet — keep playing, scenes appear here as they render.</div>
+        </div>
+      </div>
+    )
+  }
+
+  const current = ready[clampedIdx]
+  const turnText = messages.find(m => m.turn === current.turn && m.role === 'assistant')?.content
+
+  return (
+    <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'24px 32px',gap:16,overflowY:'auto'}}>
+      <video
+        key={current.video_segment_url}
+        ref={videoRef}
+        src={current.video_segment_url}
+        muted={muted}
+        controls
+        playsInline
+        autoPlay
+        onEnded={() => setIdx(i => Math.min(i + 1, ready.length - 1))}
+        style={{maxWidth:640,width:'100%',borderRadius:14,border:'1px solid var(--border)',background:'#000'}}
+      />
+      {turnText && (
+        <div style={{maxWidth:640,fontSize:13,color:'var(--text-secondary)',textAlign:'center',lineHeight:1.6,fontFamily:'var(--font-display)'}}>
+          {turnText}
+        </div>
+      )}
+      <div style={{display:'flex',alignItems:'center',gap:12}}>
+        <button onClick={() => setIdx(i => Math.max(0, i - 1))} disabled={clampedIdx === 0}
+          style={{background:'none',border:'1px solid var(--border)',borderRadius:8,padding:'6px 14px',
+            color:'var(--text-secondary)',cursor:clampedIdx===0?'default':'pointer',opacity:clampedIdx===0?.4:1}}>
+          ← Prev
+        </button>
+        <span style={{fontSize:11,color:'var(--text-muted)',letterSpacing:'.04em'}}>
+          Scene {clampedIdx + 1} of {ready.length} · Turn {current.turn} · {charName}
+        </span>
+        <button onClick={() => setIdx(i => Math.min(ready.length - 1, i + 1))} disabled={clampedIdx === ready.length - 1}
+          style={{background:'none',border:'1px solid var(--border)',borderRadius:8,padding:'6px 14px',
+            color:'var(--text-secondary)',cursor:clampedIdx===ready.length-1?'default':'pointer',opacity:clampedIdx===ready.length-1?.4:1}}>
+          Next →
+        </button>
+      </div>
+
+      {/* Export: pick a turn range from the ready scenes and combine them
+          into one downloadable mp4 (backend concatenates via ffmpeg). */}
+      <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'var(--text-secondary)'}}>
+        <span style={{color:'var(--text-muted)'}}>Export scenes</span>
+        <select value={exportFrom} onChange={e=>setExportFrom(e.target.value)}
+          style={{background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:6,padding:'4px 6px'}}>
+          {ready.map(m => <option key={m.turn} value={m.turn}>Turn {m.turn}</option>)}
+        </select>
+        <span style={{color:'var(--text-muted)'}}>to</span>
+        <select value={exportTo} onChange={e=>setExportTo(e.target.value)}
+          style={{background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:6,padding:'4px 6px'}}>
+          {ready.map(m => <option key={m.turn} value={m.turn}>Turn {m.turn}</option>)}
+        </select>
+        <button onClick={doExport} disabled={exporting}
+          style={{background:'var(--accent-dim)',border:'1px solid rgba(201,169,110,0.3)',borderRadius:6,
+            padding:'5px 12px',color:'var(--accent)',cursor:exporting?'default':'pointer',opacity:exporting?.6:1}}>
+          {exporting ? 'Combining…' : 'Export'}
+        </button>
+      </div>
+      {exportError && <div style={{fontSize:11,color:'var(--danger)'}}>{exportError}</div>}
+      {exportResult && (
+        <a href={exportResult.download_url} download
+          style={{fontSize:12,color:'var(--accent)',textDecoration:'underline'}}>
+          ⬇ Download exported scene ({exportResult.turns.length} turn{exportResult.turns.length===1?'':'s'})
+        </a>
+      )}
     </div>
   )
 }
@@ -287,9 +535,38 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   const [messages,setMessages]         = useState([])
   const [input,setInput]               = useState('')
   const [loading,setLoading]           = useState(false)
+  const [regenerating,setRegenerating] = useState(false)
   const [initError,setInitError]       = useState(null)
+  // Per-turn generated media (image+narration+video), keyed by turn number —
+  // populated by polling GET /sessions/{id}/media, since generation runs as
+  // a background arq job and isn't ready by the time the turn's text is.
+  const [turnMedia,setTurnMedia]       = useState({})
+  const [regeneratingMediaTurn,setRegeneratingMediaTurn] = useState(null)
+  const [muted,setMuted]               = useState(() => localStorage.getItem('scenarai_muted') === '1')
+  const [movieMode,setMovieMode]       = useState(false)
   const bodyRef  = useRef()
   const inputRef = useRef()
+
+  function toggleMuted() {
+    setMuted(m => {
+      localStorage.setItem('scenarai_muted', m ? '0' : '1')
+      return !m
+    })
+  }
+
+  async function regenerateMedia(turn) {
+    if (!sessionId || regeneratingMediaTurn) return
+    setRegeneratingMediaTurn(turn)
+    setTurnMedia(prev => ({ ...prev, [turn]: { ...prev[turn], status:'pending' } }))
+    try {
+      await api.regenerateTurnMedia(sessionId, turn)
+    } catch (err) {
+      console.error(err)
+      setTurnMedia(prev => ({ ...prev, [turn]: { ...prev[turn], status:'failed', error: err.message } }))
+    } finally {
+      setRegeneratingMediaTurn(null)
+    }
+  }
 
   const charName   = scenario?.char_name || 'Character'
   const charInit   = init(charName)
@@ -305,8 +582,16 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
       api.getLastSession(scenario.id)
         .then(last => {
           if (last?.history?.length > 0) {
+            // Best-effort turn numbering for resumed history: getLastSession
+            // doesn't return per-message turn numbers, so this counts
+            // assistant messages positionally. Accurate for ordinary 1-user-
+            // then-1-assistant sessions; a continuation turn in the resumed
+            // history could shift it — live messages this session (below)
+            // always get the real turn number from the API response.
+            let turnCounter = 0
             setMessages(last.history.map(m => ({
               role: m.role, content: m.content, sovereign: true, violations: [],
+              turn: m.role === 'assistant' ? ++turnCounter : undefined,
             })))
           }
         })
@@ -333,8 +618,32 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
   }, [messages, loading, engineReady])
 
+  // Poll for per-turn media rather than opening a socket for what's a low-
+  // frequency, best-effort background job — a turn's text lands immediately,
+  // its image/narration/video typically follow within ~10-20s.
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    async function poll() {
+      try {
+        const rows = await api.getTurnMedia(sessionId)
+        if (cancelled) return
+        setTurnMedia(prev => {
+          const next = { ...prev }
+          for (const row of rows) next[row.turn] = row
+          return next
+        })
+      } catch (err) {
+        console.error(err)
+      }
+    }
+    poll()
+    const id = setInterval(poll, 4000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [sessionId])
+
   async function send() {
-    if (!input.trim() || !sessionId || loading || !engineReady) return
+    if (!input.trim() || !sessionId || loading || regenerating || !engineReady) return
     const text = input.trim()
     setInput('')
     // Add user message immediately
@@ -378,6 +687,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
                     content: data.response,
                     sovereign: data.sovereign,
                     violations: data.violations,
+                    turn: data.turn,
                     streaming: false,
                   }
                   return updated
@@ -398,6 +708,52 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     } finally {
       setLoading(false)
       inputRef.current?.focus()
+    }
+  }
+
+  // No player input this turn — let the narrator advance the scene on its
+  // own. Not streamed (unlike send()): /continue is a plain request/response
+  // endpoint, same shape as the non-streaming /turn.
+  async function continueStory() {
+    if (!sessionId || loading || regenerating || !engineReady) return
+    setLoading(true)
+    try {
+      const data = await api.continueTurn(sessionId, engineModel)
+      setMessages(m => [...m, {
+        role: 'assistant', content: data.response,
+        sovereign: data.sovereign, violations: data.violations,
+        turn: data.turn, isContinuation: true,
+      }])
+    } catch (err) {
+      setMessages(m => [...m, { role:'error', content:err.message }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Discard the last reply and try again for the same input — replaces the
+  // last message in place, does not append a new one.
+  async function regenerateStory() {
+    if (!sessionId || loading || regenerating || !engineReady) return
+    setRegenerating(true)
+    try {
+      const data = await api.regenerateTurn(sessionId, engineModel)
+      setMessages(m => {
+        const updated = [...m]
+        const lastIdx = updated.length - 1
+        if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+          updated[lastIdx] = {
+            ...updated[lastIdx],
+            content: data.response, sovereign: data.sovereign,
+            violations: data.violations, turn: data.turn,
+          }
+        }
+        return updated
+      })
+    } catch (err) {
+      setMessages(m => [...m, { role:'error', content:err.message }])
+    } finally {
+      setRegenerating(false)
     }
   }
 
@@ -428,12 +784,27 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
           }}>{charInit}</div>
           <div className="play-title">{scenario?.title || charName}</div>
         </div>
-        {persona && (
-          <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:8}}>
-            <div className="card-persona-dot">{personaInit}</div>
-            <span style={{fontSize:13,color:'var(--text-muted)'}}>{personaName}</span>
-          </div>
-        )}
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
+          <button onClick={toggleMuted} title={muted?'Unmute scene narration':'Mute scene narration'}
+            style={{background:'none',border:'1px solid var(--border)',borderRadius:8,width:30,height:30,
+              cursor:'pointer',color:'var(--text-secondary)',fontSize:14,display:'flex',
+              alignItems:'center',justifyContent:'center'}}>
+            {muted ? '🔇' : '🔊'}
+          </button>
+          <button onClick={()=>setMovieMode(v=>!v)} title="Watch generated scenes as a movie"
+            style={{background:movieMode?'var(--accent-dim)':'none',
+              border:`1px solid ${movieMode?'var(--accent)':'var(--border)'}`,borderRadius:8,
+              padding:'5px 12px',cursor:'pointer',color:movieMode?'var(--accent)':'var(--text-secondary)',
+              fontSize:12,letterSpacing:'.04em'}}>
+            {movieMode ? '💬 Chat' : '🎬 Movie'}
+          </button>
+          {persona && (
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <div className="card-persona-dot">{personaInit}</div>
+              <span style={{fontSize:13,color:'var(--text-muted)'}}>{personaName}</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Body */}
@@ -450,6 +821,8 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
         <div style={{flex:1}}>
           <InitializingScreen charName={charName}/>
         </div>
+      ) : movieMode ? (
+        <MoviePlayer turnMedia={turnMedia} messages={messages} muted={muted} charName={charName} sessionId={sessionId}/>
       ) : (
         <>
           <div ref={bodyRef} className="chat-body" style={{flex:1,overflowY:'auto',padding:'24px 32px',maxWidth:780,margin:'0 auto',width:'100%'}}>
@@ -471,7 +844,15 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
                 ? <div key={`err-${i}-${m.content.slice(0,16)}`} style={{color:'var(--danger)',fontSize:13,margin:'8px 0'}}>{m.content}</div>
                 : <Bubble key={`${m.role}-${i}-${(m.content||'').slice(0,16)}`} msg={m}
                     charName={charName} charInit={charInit}
-                    personaName={personaName} personaInit={personaInit}/>
+                    personaName={personaName} personaInit={personaInit}
+                    sessionId={sessionId}
+                    isLast={i === messages.length - 1 && m.role === 'assistant'}
+                    onRegenerate={regenerateStory}
+                    regenerating={regenerating}
+                    media={m.turn ? turnMedia[m.turn] : undefined}
+                    muted={muted}
+                    onRegenerateMedia={m.turn ? () => regenerateMedia(m.turn) : undefined}
+                    regeneratingMedia={m.turn === regeneratingMediaTurn}/>
             )}
 
             {/* Typing indicator — only show when not streaming */}
@@ -504,8 +885,20 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
           {/* Input */}
           <div className="play-input-wrapper" style={{padding:'16px 32px',borderTop:'1px solid var(--border)',
             maxWidth:780,margin:'0 auto',width:'100%',flexShrink:0}}>
-            <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:8,letterSpacing:'.04em'}}>
-              **action** · "speech" · plain · [To Herself] thought
+            <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:8,letterSpacing:'.04em',display:'flex',justifyContent:'space-between'}}>
+              <span>**action** · "speech" · plain · [To Herself] thought</span>
+              <button
+                onClick={continueStory}
+                disabled={loading||regenerating||!sessionId||!engineReady}
+                title="Let the narrator continue the scene without your input"
+                style={{
+                  background:'none',border:'none',cursor:loading||regenerating||!sessionId||!engineReady?'default':'pointer',
+                  color:'var(--text-muted)',fontSize:11,letterSpacing:'.04em',textDecoration:'underline',
+                  opacity:loading||regenerating||!sessionId||!engineReady?0.4:0.85,padding:0,
+                }}
+              >
+                ↻ Let it continue
+              </button>
             </div>
             <div style={{display:'flex',gap:10,alignItems:'flex-end'}}>
               <textarea ref={inputRef} className="play-input" rows={1}
@@ -514,7 +907,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
                 placeholder={engineReady?'What do you do?':'Waiting for engine…'}
                 disabled={!engineReady}
               />
-              <button className="play-send" onClick={send} disabled={loading||!sessionId||!engineReady}>
+              <button className="play-send" onClick={send} disabled={loading||regenerating||!sessionId||!engineReady}>
                 Send
               </button>
             </div>
@@ -571,12 +964,19 @@ function HistoryTab({ scenarios, onReopen }) {
             onMouseLeave={e=>e.currentTarget.style.borderColor='var(--border)'}
           >
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
-              <div style={{
-                width:28,height:28,borderRadius:'50%',flexShrink:0,
-                background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',
-                display:'flex',alignItems:'center',justifyContent:'center',
-                fontFamily:'var(--font-display)',fontSize:12,fontStyle:'italic',color:'var(--text-secondary)',
-              }}>{init(sc?.char_name||'??')}</div>
+              {log.thumbnail_url ? (
+                <img src={log.thumbnail_url} alt="" style={{
+                  width:28,height:28,borderRadius:8,flexShrink:0,objectFit:'cover',
+                  border:'1px solid rgba(255,255,255,0.1)',
+                }}/>
+              ) : (
+                <div style={{
+                  width:28,height:28,borderRadius:'50%',flexShrink:0,
+                  background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                  fontFamily:'var(--font-display)',fontSize:12,fontStyle:'italic',color:'var(--text-secondary)',
+                }}>{init(sc?.char_name||'??')}</div>
+              )}
               <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>
                 {sc?.title||sc?.char_name||'Unknown scenario'}
               </div>
@@ -725,6 +1125,41 @@ function App() {
     queryFn: () => api.listModels(),
     enabled: !!user,
     staleTime: Infinity,
+  })
+  // Mock billing (see backend/models.py's UserSubscription docstring) --
+  // 404s until MOCK_BILLING_ENABLED is on, so retry:false + the ?? []
+  // fallback below mean the tab just renders empty rather than erroring
+  // for real users while the flag is off.
+  const { data: tiers = [] } = useQuery({
+    queryKey: ['billing-tiers'],
+    queryFn: () => api.listTiers(),
+    enabled: !!user && activeTab === 'billing',
+    retry: false,
+  })
+  const { data: mySubscription } = useQuery({
+    queryKey: ['my-subscription'],
+    queryFn: () => api.getMySubscription(),
+    enabled: !!user && activeTab === 'billing',
+    retry: false,
+  })
+  const [subscribing, setSubscribing] = useState(null)  // tier id currently being mock-subscribed to
+  const mockSubscribeToTier = async (tierId) => {
+    setSubscribing(tierId)
+    try {
+      await api.mockSubscribe(tierId)
+      await qc.invalidateQueries({ queryKey: ['my-subscription'] })
+    } finally {
+      setSubscribing(null)
+    }
+  }
+  // Admin-only telemetry -- see backend main.get_telemetry's docstring.
+  // refetchInterval keeps the TPM gauge live without a manual refresh.
+  const { data: telemetry } = useQuery({
+    queryKey: ['telemetry'],
+    queryFn: () => api.getTelemetry(),
+    enabled: !!user?.is_admin && activeTab === 'telemetry',
+    refetchInterval: 5_000,
+    retry: false,
   })
 
   const scenarios = [
@@ -896,7 +1331,8 @@ function App() {
       )
     : filtered
 
-  const tabs = ['persona','scenario','browse','history','settings']
+  const tabs = ['persona','scenario','browse','history','billing',
+                ...(user?.is_admin ? ['telemetry'] : []), 'settings']
 
   return (
     <div style={{display:'flex',height:'100vh',overflow:'hidden'}}>
@@ -998,6 +1434,106 @@ function App() {
         </div>
 
         {/* Settings */}
+        {/* Billing -- mock only, no real payment ever happens here.
+            No card fields anywhere by design, see backend/models.py. */}
+        <div className={`tab-panel ${activeTab==='billing'?'active':''}`}>
+          <div className="section-title">Plans</div>
+          {tiers.length === 0 ? (
+            <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:1.6}}>
+              Billing isn't available yet.
+            </div>
+          ) : (
+            <>
+              <div style={{fontSize:12,color:'var(--text-muted)',lineHeight:1.6,marginBottom:16}}>
+                Preview only — no payment is processed, nothing is charged. This reserves your plan for when billing goes live.
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                {tiers.map(t => {
+                  const isCurrent = mySubscription?.tier_id === t.id
+                  return (
+                    <div key={t.id} style={{padding:'14px 16px',background:'var(--bg-card)',border:`1px solid ${isCurrent?'var(--accent)':'var(--border)'}`,borderRadius:10}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+                        <div style={{fontSize:15,fontWeight:600}}>{t.name}</div>
+                        <div style={{fontSize:14,color:'var(--accent)'}}>
+                          {t.price_cents === 0 ? 'Free' : `$${(t.price_cents/100).toFixed(2)}/mo`}
+                        </div>
+                      </div>
+                      <ul style={{margin:'8px 0 0',paddingLeft:18,fontSize:12,color:'var(--text-secondary)',lineHeight:1.8}}>
+                        {t.features.map((f,i)=><li key={i}>{f}</li>)}
+                        <li>{t.turns_per_day ? `${t.turns_per_day} turns/day` : 'Unlimited turns'}</li>
+                      </ul>
+                      <button
+                        style={{marginTop:10}}
+                        disabled={isCurrent || subscribing===t.id}
+                        onClick={()=>mockSubscribeToTier(t.id)}
+                      >
+                        {isCurrent ? 'Current plan' : subscribing===t.id ? 'Reserving...' : 'Reserve this plan'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Telemetry -- admin-only, see backend main.get_telemetry */}
+        {user?.is_admin && (
+          <div className={`tab-panel ${activeTab==='telemetry'?'active':''}`}>
+            <div className="section-title">Capacity</div>
+            {!telemetry ? (
+              <div style={{fontSize:13,color:'var(--text-muted)'}}>Loading...</div>
+            ) : (
+              <>
+                <div style={{padding:'14px 16px',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,marginBottom:12}}>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-secondary)',marginBottom:6}}>
+                    <span>Groq TPM budget</span>
+                    <span>{telemetry.groq_tpm_used} / {telemetry.groq_tpm_limit}</span>
+                  </div>
+                  <div style={{height:8,background:'var(--border)',borderRadius:4,overflow:'hidden'}}>
+                    <div style={{
+                      height:'100%',
+                      width:`${Math.min(100,(telemetry.groq_tpm_used/telemetry.groq_tpm_limit)*100)}%`,
+                      background: telemetry.groq_tpm_used/telemetry.groq_tpm_limit > 0.8 ? '#e05252' : 'var(--accent)',
+                      transition:'width 0.3s',
+                    }}/>
+                  </div>
+                  <div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>
+                    Resets every minute (sliding window). Measured limit, not a guess — see rate_limiter.py.
+                  </div>
+                </div>
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                  {[
+                    ['Active sessions', telemetry.active_sessions],
+                    ['Prefab jobs', `${telemetry.prefab_jobs_running} / ${telemetry.prefab_jobs_max}`],
+                    ['Total scenarios', telemetry.total_scenarios],
+                    ['Total plays', telemetry.total_plays],
+                  ].map(([label,val])=>(
+                    <div key={label} style={{padding:'10px 12px',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10}}>
+                      <div style={{fontSize:11,color:'var(--text-secondary)'}}>{label}</div>
+                      <div style={{fontSize:18,fontWeight:600,marginTop:2}}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="section-title" style={{marginTop:20}}>Turn media generation</div>
+                {Object.keys(telemetry.turn_media_by_status).length === 0 ? (
+                  <div style={{fontSize:12,color:'var(--text-muted)'}}>No generated media yet.</div>
+                ) : (
+                  <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                    {Object.entries(telemetry.turn_media_by_status).map(([status,count])=>(
+                      <div key={status} style={{padding:'8px 12px',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,fontSize:12}}>
+                        {status}: <strong>{count}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         <div className={`tab-panel ${activeTab==='settings'?'active':''}`}>
           <div className="section-title">Engine</div>
           <div className="field">

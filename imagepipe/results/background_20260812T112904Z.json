@@ -1,0 +1,281 @@
+{
+  "B4": {
+    "tier": "B4",
+    "prompt": "long silver hair character in the center, wearing a green cloak, in a torch-lit stone corridor, a crowd of people in the background, digital painting, single character",
+    "num_chains": 20,
+    "max_retries": 5,
+    "success_count": 15,
+    "success_rate": 0.75,
+    "avg_tries_on_success": 2.53,
+    "chains": [
+      {
+        "id": 0,
+        "seed_cursor": 4,
+        "tries": 4,
+        "resolved": true,
+        "answers": {
+          "hair_center": "white",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 3
+      },
+      {
+        "id": 1,
+        "seed_cursor": 1002,
+        "tries": 2,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 1001
+      },
+      {
+        "id": 2,
+        "seed_cursor": 2001,
+        "tries": 1,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 2000
+      },
+      {
+        "id": 3,
+        "seed_cursor": 3005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "hair_center": "blonde",
+          "crowd_present": "yes"
+        }
+      },
+      {
+        "id": 4,
+        "seed_cursor": 4002,
+        "tries": 2,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "black",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 4001
+      },
+      {
+        "id": 5,
+        "seed_cursor": 5003,
+        "tries": 3,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "black",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 5002
+      },
+      {
+        "id": 6,
+        "seed_cursor": 6002,
+        "tries": 2,
+        "resolved": true,
+        "answers": {
+          "hair_center": "white",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "gray",
+          "crowd_present": "no"
+        },
+        "locked_seed": 6001
+      },
+      {
+        "id": 7,
+        "seed_cursor": 7001,
+        "tries": 1,
+        "resolved": true,
+        "answers": {
+          "hair_center": "white",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 7000
+      },
+      {
+        "id": 8,
+        "seed_cursor": 8002,
+        "tries": 2,
+        "resolved": true,
+        "answers": {
+          "hair_center": "white",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "blue",
+          "crowd_present": "no"
+        },
+        "locked_seed": 8001
+      },
+      {
+        "id": 9,
+        "seed_cursor": 9003,
+        "tries": 3,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 9002
+      },
+      {
+        "id": 10,
+        "seed_cursor": 10004,
+        "tries": 4,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 10003
+      },
+      {
+        "id": 11,
+        "seed_cursor": 11005,
+        "tries": 5,
+        "resolved": true,
+        "answers": {
+          "hair_center": "white",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 11004
+      },
+      {
+        "id": 12,
+        "seed_cursor": 12002,
+        "tries": 2,
+        "resolved": true,
+        "answers": {
+          "hair_center": "grey",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "black",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 12001
+      },
+      {
+        "id": 13,
+        "seed_cursor": 13002,
+        "tries": 2,
+        "resolved": true,
+        "answers": {
+          "hair_center": "grey",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "black",
+          "crowd_present": "no"
+        },
+        "locked_seed": 13001
+      },
+      {
+        "id": 14,
+        "seed_cursor": 14005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "yes"
+        }
+      },
+      {
+        "id": 15,
+        "seed_cursor": 15001,
+        "tries": 1,
+        "resolved": true,
+        "answers": {
+          "hair_center": "gray",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 15000
+      },
+      {
+        "id": 16,
+        "seed_cursor": 16005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "hair_center": "black",
+          "crowd_present": "yes"
+        }
+      },
+      {
+        "id": 17,
+        "seed_cursor": 17004,
+        "tries": 4,
+        "resolved": true,
+        "answers": {
+          "hair_center": "white",
+          "crowd_present": "yes"
+        },
+        "last_answers": {
+          "hair_center": "black",
+          "crowd_present": "yes"
+        },
+        "locked_seed": 17003
+      },
+      {
+        "id": 18,
+        "seed_cursor": 18005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "hair_center": "white",
+          "crowd_present": "no"
+        }
+      },
+      {
+        "id": 19,
+        "seed_cursor": 19005,
+        "tries": 5,
+        "resolved": false,
+        "answers": null,
+        "last_answers": {
+          "hair_center": "brown",
+          "crowd_present": "no"
+        }
+      }
+    ]
+  }
+}

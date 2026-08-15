@@ -1,0 +1,77 @@
+{
+  "prompt": "long silver hair, loosely braided, pale grey eyes, dark green traveling cloak over leather armor, a thin scar across the left eyebrow, digital painting, portrait, single character, plain background, standing in a torch-lit stone corridor, hand resting on the hilt of a sword",
+  "num_runs": 10,
+  "turns_per_run": 20,
+  "steps": 20,
+  "generation_seconds": 1338.6,
+  "seconds_per_image": 6.69,
+  "within_run": {
+    "eye_match_rate": {
+      "mean": 0.0,
+      "stdev": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "scar_match_rate": {
+      "mean": 0.015,
+      "stdev": 0.0242,
+      "min": 0.0,
+      "max": 0.05
+    },
+    "both_match_rate": {
+      "mean": 0.0,
+      "stdev": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "image_sim_mean": {
+      "mean": 0.8499,
+      "stdev": 0.0278,
+      "min": 0.8063,
+      "max": 0.8841
+    }
+  },
+  "between_run_note": "the 'stdev' fields above ARE the between-run consistency measure -- how much each run's own within-run rate varies from run to run",
+  "sample_answers": [
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "brown",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    },
+    {
+      "eye_color": "black",
+      "scar_mark": "no"
+    }
+  ]
+}

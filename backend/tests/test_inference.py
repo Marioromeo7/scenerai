@@ -6,10 +6,14 @@ from engine.inference import (
     detect_from_player_input,
     _parse_guard_verdict,
     _same_raw_response,
+    _similar_response,
     check_sovereignty,
     sanitize_input,
+    _integrity_band,
+    _apply_resolve_shifts,
+    build_system,
 )
-from engine.types import Entity
+from engine.types import Entity, WorldState, Memory
 
 
 # ── Language detection ────────────────────────────────────────
@@ -167,6 +171,38 @@ class TestSameRawResponse:
         assert _same_raw_response('  hello  ', 'hello') is True
 
 
+class TestSimilarResponse:
+    def test_identical_is_similar(self):
+        assert _similar_response('Hello world', 'Hello world') is True
+
+    def test_completely_different_is_not_similar(self):
+        assert _similar_response(
+            'Iris nods and returns to her work.',
+            'A storm breaks over the harbor as ships scatter.',
+        ) is False
+
+    def test_near_duplicate_with_appended_sentence_is_similar(self):
+        """The actual production case: a repair reused an entire prior
+        paragraph verbatim and just appended one sentence."""
+        previous = (
+            'Iris nods once, her gaze steady, and returns to the ledger without '
+            'another word, the silence settling comfortably between you.'
+        )
+        near_dup = previous + ' She closes the book.'
+        assert _similar_response(near_dup, previous) is True
+
+    def test_same_topic_different_wording_not_flagged(self):
+        """Two responses about the same scene/character shouldn't false-positive
+        just for sharing a name and setting — this needs real textual overlap."""
+        a = 'Iris looks up briefly, then returns her attention to the ledger.'
+        b = 'The archive is quiet. Dust motes drift in the lamplight overhead.'
+        assert _similar_response(a, b) is False
+
+    def test_none_values_not_similar(self):
+        assert _similar_response(None, 'hello') is False
+        assert _similar_response('hello', None) is False
+
+
 # ── Sovereignty checker ───────────────────────────────────────
 
 def _player_and_npc():
@@ -216,18 +252,22 @@ class TestCheckSovereignty:
         user_content = mock.call_args[0][1][0]['content']
         assert '**' not in user_content
 
-    def test_llm_exception_returns_clean(self):
+    def test_llm_exception_fails_closed(self):
+        """Fail closed, not open — this is meant to be the hard-block last
+        line of defense; a broken validator call must not silently ship an
+        unreviewed response. Found live via the judge harness hitting a
+        malformed validator response in production."""
         with patch('engine.inference.call') as mock:
             mock.side_effect = RuntimeError('API down')
             result = check_sovereignty('Some text.', 'Alex', _player_and_npc())
-        assert result['clean'] is True
-        assert result['count'] == 0
+        assert result['clean'] is False
+        assert result['count'] == 1
 
-    def test_non_json_response_returns_clean(self):
+    def test_non_json_response_fails_closed(self):
         with patch('engine.inference.call') as mock:
             mock.return_value = ('not json at all', 0.1)
             result = check_sovereignty('Some text.', 'Alex', _player_and_npc())
-        assert result['clean'] is True
+        assert result['clean'] is False
 
     def test_code_fenced_json_parsed_correctly(self):
         with patch('engine.inference.call') as mock:
@@ -373,3 +413,117 @@ class TestSanitizeInput:
         result = sanitize_input('ｈｅｌｌｏ')
         assert '[filtered]' not in result
         assert result == 'hello'
+
+
+# ── Integrity resolve — "rope loosened by behaviour" ───────────
+
+class TestIntegrityBand:
+    def test_full_resolve_is_intact(self):
+        label, guidance = _integrity_band(1.0)
+        assert label == 'INTACT'
+        assert 'rigid' in guidance
+
+    def test_boundary_at_71_is_intact(self):
+        assert _integrity_band(0.71)[0] == 'INTACT'
+
+    def test_just_below_71_is_tested(self):
+        assert _integrity_band(0.70)[0] == 'TESTED'
+
+    def test_boundary_at_41_is_tested(self):
+        assert _integrity_band(0.41)[0] == 'TESTED'
+
+    def test_just_below_41_is_worn(self):
+        assert _integrity_band(0.40)[0] == 'WORN'
+
+    def test_boundary_at_11_is_worn(self):
+        assert _integrity_band(0.11)[0] == 'WORN'
+
+    def test_just_below_11_is_broken(self):
+        assert _integrity_band(0.10)[0] == 'BROKEN'
+
+    def test_zero_is_broken(self):
+        label, guidance = _integrity_band(0.0)
+        assert label == 'BROKEN'
+        assert 'earned' in guidance
+
+
+class TestApplyResolveShifts:
+    def test_negative_delta_erodes_resolve(self):
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        _apply_resolve_shifts([e], {'Iris': {'delta': -0.1, 'reason': 'shown vulnerability'}})
+        assert e.integrity_resolve == 0.9
+        assert e.integrity_notes == ['shown vulnerability']
+
+    def test_positive_delta_is_ignored_not_tightened(self):
+        """The rope only loosens — a model hallucinating a positive delta must not tighten it."""
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        _apply_resolve_shifts([e], {'Iris': {'delta': 0.3, 'reason': 'reasserted boundary'}})
+        assert e.integrity_resolve == 1.0
+
+    def test_delta_capped_at_negative_point_two_per_turn(self):
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        _apply_resolve_shifts([e], {'Iris': {'delta': -0.9, 'reason': 'huge swing'}})
+        assert e.integrity_resolve == 0.8
+
+    def test_resolve_clamped_at_zero_not_negative(self):
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key',
+                   integrity_resolve=0.05)
+        _apply_resolve_shifts([e], {'Iris': {'delta': -0.2, 'reason': 'final break'}})
+        assert e.integrity_resolve == 0.0
+
+    def test_entity_without_never_does_is_untouched(self):
+        e = Entity(name='Iris', pronouns='she/her')  # no tracked boundary
+        _apply_resolve_shifts([e], {'Iris': {'delta': -0.5, 'reason': 'irrelevant'}})
+        assert e.integrity_resolve == 1.0
+
+    def test_notes_capped_at_last_five(self):
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        for i in range(7):
+            _apply_resolve_shifts([e], {'Iris': {'delta': -0.01, 'reason': f'moment {i}'}})
+        assert len(e.integrity_notes) == 5
+        assert e.integrity_notes[0] == 'moment 2'
+        assert e.integrity_notes[-1] == 'moment 6'
+
+    def test_unlisted_entity_is_untouched(self):
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        _apply_resolve_shifts([e], {})
+        assert e.integrity_resolve == 1.0
+
+
+class TestBuildSystemIntegrity:
+    def _fixtures(self):
+        persona = Entity(name='Alex', pronouns='they/them', role='Detective', is_player=True)
+        world   = WorldState(location='Archive Hall', time_of_day='midnight',
+                             era='modern', atmosphere='tense')
+        memory  = Memory()
+        layer1  = 'A sealed archive at night.'
+        return persona, world, memory, layer1
+
+    def test_intact_boundary_shows_intact_label(self):
+        persona, world, memory, layer1 = self._fixtures()
+        npc = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        system = build_system(persona, [persona, npc], world, memory, layer1)
+        assert 'INTACT' in system
+        assert 'would never yield the key' in system
+
+    def test_worn_boundary_shows_worn_label_and_erosion_notes(self):
+        persona, world, memory, layer1 = self._fixtures()
+        npc = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key',
+                     integrity_resolve=0.3, integrity_notes=['softened at the threshold'])
+        system = build_system(persona, [persona, npc], world, memory, layer1)
+        assert 'WORN' in system
+        assert 'softened at the threshold' in system
+
+    def test_broken_boundary_frames_crossing_as_earned(self):
+        persona, world, memory, layer1 = self._fixtures()
+        npc = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key',
+                     integrity_resolve=0.0)
+        system = build_system(persona, [persona, npc], world, memory, layer1)
+        assert 'BROKEN' in system
+        assert 'earned' in system
+
+    def test_no_never_does_omits_integrity_block_for_that_npc(self):
+        persona, world, memory, layer1 = self._fixtures()
+        npc = Entity(name='Iris', pronouns='she/her')  # no tracked boundary
+        system = build_system(persona, [persona, npc], world, memory, layer1)
+        assert 'Iris — CHARACTER INTEGRITY' not in system

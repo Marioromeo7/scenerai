@@ -10,9 +10,16 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const token = localStorage.getItem('scenarai_token')
     if (token) {
+      // api.me() transparently refreshes on a stale access token (see
+      // api.js's request() interceptor) -- reaching .catch() here means
+      // the refresh token itself was also invalid/expired/revoked, so
+      // both stored tokens are stale, not just the access token.
       api.me()
         .then(setUser)
-        .catch(() => localStorage.removeItem('scenarai_token'))
+        .catch(() => {
+          localStorage.removeItem('scenarai_token')
+          localStorage.removeItem('scenarai_refresh_token')
+        })
         .finally(() => setLoading(false))
     } else {
       setLoading(false)
@@ -21,20 +28,20 @@ export function AuthProvider({ children }) {
 
   async function login(email, password) {
     const data = await api.login(email, password)
-    localStorage.setItem('scenarai_token', data.access_token)
+    api.storeTokens(data)
     setUser(data.user)
     return data.user
   }
 
   async function register(email, password) {
     const data = await api.register(email, password)
-    localStorage.setItem('scenarai_token', data.access_token)
+    api.storeTokens(data)
     setUser(data.user)
     return data.user
   }
 
-  function logout() {
-    localStorage.removeItem('scenarai_token')
+  async function logout() {
+    await api.logout() // revokes the refresh token server-side, then clears local storage either way
     setUser(null)
   }
 

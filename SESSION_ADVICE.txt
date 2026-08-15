@@ -1,0 +1,638 @@
+SCENARAI — SESSION ADVICE
+Compiled 2026-08-05, covering: Section 1.1/1.2/1.4 implementation, Section 3
+Tier-B load-test baseline, a competitor comparison, the integrity-resolve
+guard mechanism, and a second critique-and-fix pass on all of the above.
+==============================================================================
+
+0. BIGGEST FINDING OF THE WHOLE SESSION — A PRE-EXISTING DATA-LOSS BUG
+--------------------------------------------------------------------------
+While live-testing the new integrity-resolve mechanism (see section 9),
+found and fixed a real, previously-unknown bug: extract_and_save_assumptions
+and summarize_async (now summarize_chunk) ran on fire-and-forget daemon
+threads. step() returned — and the caller's serialize_engine() ran — almost
+immediately after starting them, before their LLM call (1-5s+) had any
+chance to finish. Their mutations landed on Entity/Memory objects that were
+already orphaned by the time they completed.
+
+Consequence: saved_assumptions, physical_state, and (newly) integrity_resolve
+essentially never persisted across turns, for as long as this pattern has
+existed — not something introduced this session. Worse: summarize_chunk's
+summary is supposed to preserve the content of a history chunk that gets
+TRUNCATED immediately after the thread is started. If the summary is lost to
+this race (which it almost always was), that chunk of conversation is gone
+with no recovery path — real, silent data loss on any session long enough
+to trigger compression (MAX_RAW_TURNS).
+
+Fixed by making both run synchronously, positioned so their mutations
+complete before serialize_engine() runs (backend/engine/engine.py,
+backend/ai_service.py, backend/engine/inference.py). Verified live: resolve
+now erodes cumulatively across turns (1.0 -> 0.90 -> 0.80 -> 0.65 -> 0.50 ->
+0.35) instead of resetting to 0.90 every single turn as it did before the
+fix. This likely also fixes saved_assumptions/physical_state, though that
+wasn't separately live-verified — worth a dedicated check.
+Tradeoff: turns are now marginally slower (one more synchronous LLM call in
+the chain) in exchange for a feature that actually works instead of
+silently no-op-ing. Given turns already take 30-100s (section 2 below),
+this was the right call, but flagging the tradeoff explicitly.
+
+1. DO THIS TODAY — ROTATE THE GROQ API KEY
+------------------------------------------
+.env still holds GROQ_API_KEY=gsk_nBpG... — the exact key INSPECTION_REPORT.md
+flagged as CRITICAL and leaked back in May. It was never rotated. If that
+.env or the old backend.env dump was ever pushed, screenshotted, or seen by
+anyone outside this machine, it's been spendable this whole time.
+-> Rotate at console.groq.com now. This is independent of everything else
+   below and doesn't wait on any other decision.
+
+2. THE BIGGEST FINDING FROM TODAY'S LOAD TEST: TURN LATENCY, NOT CONCURRENCY
+------------------------------------------------------------------------------
+Ran a 5-client sequential Tier-B baseline (loadtest/) against a live stack.
+Zero concurrency — one client at a time. Result: every single turn took
+30-70+ seconds. Root cause, confirmed from backend logs, is two compounding
+things:
+  a) Groq's SDK auto-retries with escalating backoff (8-14s waits, sometimes
+     stacked twice) when it hits a rate limit on this API key/tier.
+  b) A single turn can trigger up to ~5 sequential Groq calls (main response,
+     continuity validator, repair, re-validator, fallback) when the guard
+     fires. Each of those calls independently eats its own backoff if
+     rate-limited, so the delays compound within one turn.
+  c) The specific test scenario's inferred "never_does" rule was unusually
+     strict ("would never surrender her power over the archive") and tripped
+     the continuity guard on nearly every turn, which is what pushed most
+     turns into the full repair chain instead of the fast single-validator
+     path (which took 1-3s when it didn't fire).
+
+This is real, reproducible, not a Docker artifact (separate from the DNS
+blip noted below) and not something I introduced this session — but it's a
+serious production concern nobody had real numbers for before. 30-70s per
+turn, from ONE user, on a currently-idle Groq key, is well past what the
+fake-streaming UX (buffer-then-reveal) can gracefully hide, and Groq's
+rate limits are per-API-key — concurrent real users would share and
+compound this, not avoid it.
+-> Before shipping to real users: check what Groq tier/plan this key is on
+   and what its actual RPM/TPM limits are. If it's the free tier, this alone
+   may be the dominant latency problem long before any backend capacity
+   limit is reached.
+-> Separately worth investigating: why did this scenario's guard fire on
+   almost every turn? If that's typical (not a fluke of this one generated
+   character), the repair chain firing routinely — not just on edge cases —
+   is itself a latency and cost driver worth understanding.
+
+3. DON'T RUN THE FULL CONCURRENCY RAMP YET
+-------------------------------------------
+The plan's Section 3 wants to find Scenarai's own backend breakpoint. Given
+finding #2, a concurrency ramp run right now would mostly measure how fast
+this one Groq API key's rate limit gets exhausted, not the backend's own
+capacity — a different question, and a confound that would make the ramp
+report hard to trust. Before running loadtest/run.py ramp for real:
+  - Either get a higher Groq tier/rate limit for testing, or
+  - Temporarily stub/mock the LLM call layer so the ramp isolates
+    Scenarai's own infra (Postgres/Redis/arq/FastAPI) capacity from Groq's.
+There's a second, separate confound already documented in loadtest/README.md:
+slowapi's rate limiter keys on source IP (get_remote_address), not per-user.
+Every virtual client in a Tier-B run shares this machine's IP, so
+register/login/session/turn rate limits apply to the whole test run, not
+per client — expect early hard_error (429) that isn't a real breakpoint
+either, unless those limits are temporarily raised for a test run.
+
+4. SMALLER THING NOTICED DURING THE LIVE RUN
+----------------------------------------------
+A few 3-in-a-row init failures were httpcore.ConnectError: "Temporary
+failure in name resolution" — a DNS blip reaching Groq from inside Docker
+Desktop on this machine. Retried clean on the next run. Not a code issue,
+just a known category of Docker-Desktop-on-Windows flakiness. If it recurs
+often, worth adding an explicit `dns:` entry to docker-compose.yml, but not
+urgent based on a single occurrence.
+
+5. WHAT'S DONE THIS SESSION (Section 1.1 + 1.2 + 1.4 quick fixes)
+---------------------------------------------------------------------
+- prefab_status (pending/ready/failed) + POST /scenarios/{id}/retry-prefab
+- NPC/pronoun classification failures degrade gracefully instead of
+  aborting scenario init
+- Every turn checkpoints to Postgres (SessionLog), not just clean disconnect
+- Prefab + session-init jobs moved from FastAPI BackgroundTasks to a real
+  arq worker/queue (new `worker` service in docker-compose.yml)
+- Guard's continuity-repair payload rebuilt structurally, no more fragile
+  string .replace()
+- Duplicate frontend/src, frontend/public, frontend/Dockerfile deleted —
+  frontend/app/ is now the only tree, docker-compose builds it directly
+- CI (.github/workflows/tests.yml) runs pytest + flake8 on push/PR
+- Built loadtest/ — a Tier-B headless load-test harness (player + creator
+  flows, structured hard_error/latency_breach/silent_bad_state reporting,
+  baseline mode + ramp mode) per Section 3 of the plan
+
+All 181 existing backend tests still pass. New code (worker.py, the arq
+wiring, the checkpointing helper) has NOT been given its own unit tests —
+worth adding before this is considered done to the same bar as the rest of
+the codebase.
+
+6. WHAT'S STILL OPEN FROM THE PLAN, IN THE PLAN'S OWN SUGGESTED ORDER
+---------------------------------------------------------------------
+Next per NEXT_PHASE_PLAN.md's suggested execution order:
+  - Section 2: judge harness (separate offline quality scorer, golden
+    scenarios, gpt-oss-120b via Groq as judge model) — run against the
+    current engine as a baseline before further engine changes.
+  - Section 1.3 + 4.1/4.2: schema/storage decisions (image_url/video_url
+    columns, R2 setup) + visual-profile experimentation harness — these
+    need YOUR Cloudflare R2 / Gemini / HF credentials before I can wire
+    anything real; I can write the code and leave placeholders, but nothing
+    runs end-to-end without those accounts.
+  - Section 4.3: local SD1.5 + Kokoro + ffmpeg pipeline — needs the GPU
+    you confirmed exists on this machine; not yet started.
+  - Section 3 Tier A: real Flutter + Docker-Android emulators — heavier
+    infra to stand up, explicitly sequenced last in the plan.
+  - Section 5 (5.1 production compute path, 5.2 adult-content business
+    model, 5.3 monetization): the plan itself says these need YOUR
+    judgment, not mine. Still unresolved. 5.2 in particular has sharpened
+    since the plan was written — see item 8 below.
+
+7. HOUSEKEEPING NOTICED BUT NOT TOUCHED (OUT OF THIS SESSION'S SCOPE)
+-----------------------------------------------------------------------
+- backend/main.py's `import asyncio` was dead (unused) as of the first pass —
+  now used for end_session's lock-wait (section 9), no longer dead.
+- INSPECTION_REPORT.md is from May 2026 (3 months stale). Some items in it
+  are already fixed (health endpoint, sovereignty is now LLM-based not
+  regex, rate limiting exists on turn endpoints). Others were NOT re-checked
+  this session and may still be open: JWT has no refresh/revocation,
+  Redis is a singleton with no connection pooling, no backend healthcheck
+  in docker-compose, bcrypt capped <4.0.0, alembic runs in container CMD
+  rather than a one-shot init step. Worth a fresh audit pass rather than
+  trusting the old report at face value.
+
+8. COMPETITOR COMPARISON — KEY TAKEAWAYS (full detail earlier in chat)
+--------------------------------------------------------------------------
+Strongest thing Scenarai has that's hard to copy: the sovereignty +
+continuity guard as a systemic, enforced mechanism. The single most-
+complained-about failure mode on JanitorAI (the AI narrating/speaking for
+the player's own character) is exactly what this guard targets, and no
+competitor researched runs anything like it — they rely on prompt tricks.
+
+Biggest gaps vs. the field:
+  - Memory horizon: single-session scoped (12h Redis TTL, resume only for
+    exact same scenario+persona). 2026's category leaders (Nomi, Kindroid,
+    SpicyChat) all sell multi-tier memory spanning months.
+  - No voice (Kokoro TTS is already scoped in the plan for the video
+    pipeline — surfacing it standalone as "read narration aloud" would be
+    a cheap win reusing planned work).
+  - No mobile app (web-only; the Flutter build in the plan is a load-test
+    harness, not a real client).
+  - Closed catalog — no import/export compatibility with the SillyTavern/
+    Chub character-card ecosystem (PNG/JSON), no seeded library.
+  - Adult-content business model unresolved (plan's own 5.2), and this has
+    gotten sharper since: Stripe/PayPal/Square ban adult AI content at the
+    acquiring-bank level regardless of opt-in design, and Character.AI just
+    shipped age-assurance amid an FTC inquiry into seven chatbot companies
+    (Sept 2025) over child safety. Not a someday problem anymore.
+
+9. THE INTEGRITY-RESOLVE GUARD MECHANISM, AND EVERYTHING FOUND CHECKING IT
+--------------------------------------------------------------------------
+Built per your direction: NPCs' "would never..." rule now erodes gradually
+based on in-scene emotional impact ("a rope loosened by behaviour"), not
+player argument. Entity gained integrity_resolve (1.0 -> 0.0, one-directional)
+and integrity_notes. Four bands — INTACT/TESTED/WORN/BROKEN — read by both
+build_system (generation) and guard_response (validation) so the writer and
+the validator agree on how much give a boundary currently has. A boundary
+crossed abruptly with no in-scene resistance is always a violation regardless
+of resolve, closing the obvious loophole.
+
+Live-tested against a "grieving archivist" scenario, 5 scripted turns
+escalating from quiet presence to a direct question about her dead sister.
+Confirmed working end to end after the section-0 fix: resolve eroded
+1.0->0.90->0.80->0.65->0.50->0.35, and the narration's tone visibly tracked
+it — turn 5 showed real internal conflict (clenched fist, flash of fear)
+instead of a flat, repeated refusal.
+
+Found and fixed along the way, all verified by tests and/or the live run:
+  - Race condition — see section 0, the big one.
+  - Guard duplicate-response detection only caught EXACT repeats
+    (_same_raw_response). In production, the repair step reused an entire
+    previous paragraph verbatim with one sentence appended — real, visible
+    to a player, and undetected. Added _similar_response (difflib-based
+    fuzzy match) and wired it into both the repair path (previously had ZERO
+    anti-repetition check at all) and the existing fallback path. Threshold
+    (0.75) is a guessed starting point, not empirically tuned — same caveat
+    as the resolve mechanism's band cutoffs and delta ranges below.
+  - worker.py never called logging.basicConfig() — main.py does, worker.py
+    didn't, so every INFO-level log from prefab/init jobs (including this
+    session's own NPC-classification-fallback logs) was likely being
+    silently dropped in production. Fixed; verified live, worker logs are
+    now properly formatted.
+  - arq_pool.enqueue_job() calls in publish_scenario/create_session/
+    retry_prefab were unguarded — if Redis was briefly unreachable exactly
+    at enqueue time, the request 500'd AFTER already committing
+    is_published=True/prefab_status=pending (or a session placeholder),
+    leaving a stuck resource with no automatic recovery. Now caught, and
+    prefab_status/session status flip to failed/error consistently with
+    how an in-flight job failure is already handled.
+  - worker had no dependency on backend being ready, only on postgres/redis
+    — implicitly relied on "nothing enqueues a job before the API is up."
+    Added a real backend healthcheck (docker-compose.yml) and made worker
+    depend on it — verified live, worker now visibly waits for backend to
+    report healthy before starting.
+  - PREFAB_JOB_KEY's Redis counter (concurrency gate on prefab jobs
+    specifically, separate from arq's own global max_jobs) could leak
+    permanently if the worker crashed between incr and the decr in finally.
+    Gave it a rolling TTL so a leak self-heals within minutes instead of
+    degrading prefab throughput forever.
+  - end_session didn't coordinate with the per-session turn lock at all — a
+    concurrent end_session could interleave SessionLog writes with an
+    in-flight turn. Added a bounded best-effort wait (up to 3s) for the
+    lock to clear before checkpointing; proceeds anyway after that with a
+    warning logged, since turns can legitimately take 30-100s+ and
+    end_session must not hang that long.
+  - resolve_shift (and the pre-existing saved_assumptions/physical_state
+    extraction) matched character names by exact string equality — a
+    nickname or rephrasing would silently no-op with no signal. Normalized
+    to case/whitespace-insensitive matching across all three, and added a
+    warning log when a name matches no entity at all (distinct from
+    matching an entity that simply has no tracked boundary, which is
+    expected and stays silent).
+
+Still true, not addressed: the band cutoffs (71/41/11%) and per-turn delta
+range (-0.03 to -0.2) are hand-picked with no empirical basis — exactly what
+section 2's (unbuilt) judge harness should validate, not something to trust
+on vibes alone. Turn latency (30-100s+, section 2) is also still fully
+unaddressed — nothing this round touched that; it's a separate, larger
+problem (Groq rate limiting) from anything fixed here.
+
+10. FOLLOW-UP ROUND — EVERYTHING FROM SECTION 9 NOW FIXED AND TESTED
+--------------------------------------------------------------------------
+Live re-verified after the fixes: integrity_resolve now erodes cumulatively
+(1.0->0.90->0.80->0.65->0.50->0.35 across 5 turns) and the near-duplicate
+response bug is gone (5 distinct, escalating turns, no repeats). Also
+directly confirmed saved_assumptions now persists cross-turn (checked
+session_logs.engine_state in Postgres directly after a 2-turn session —
+Elena's saved_assumptions was non-empty and carried from turn 1 into turn
+2's stored state), which was inferred but not proven in section 0.
+
+Added dedicated unit test coverage that didn't exist before:
+  - tests/test_worker.py (12 tests) — prefab_engine_job and init_engine_job,
+    previously only exercised live. Covers the concurrency gate, the crash-
+    leak TTL fix, every init_engine_job branch (restored/prefab/full-init/
+    no-prefab-not-preview/scenario-gone/exception/missing-redis-session).
+  - tests/test_session_checkpoint.py (8 tests) — _upsert_session_log,
+    previously untested. Covers preview-skip, insert vs. update, ended_at
+    handling, and own-session-vs-passed-db lifecycle (open/close correctness).
+Full suite: 232 passed (was 181 at session start, 212 after the first
+critique-fix round).
+
+Still open, unchanged from section 9: resolve band/delta numbers still
+unvalidated, turn latency still 30-100s+.
+
+11. THE REAL RAMP TEST — PRECISE ROOT CAUSE FOUND: TPM, NOT TPD
+--------------------------------------------------------------------------
+Ran the actual concurrency ramp (3->12 clients) live against Groq, per your
+direction to let backoff happen naturally and only stop on a genuine
+sustained failure. First attempt was invalid: the harness's own thresholds
+(from a 2-client baseline) were so tight that a normal latency blip on a
+CHEAP step (e.g. create_persona at 249ms vs. an 80ms threshold) aborted the
+whole client before it ever reached a turn call — tiers "completed" in 4
+seconds, which was the tell. Fixed: latency_breach is now recorded, not
+fail-fast (backend/loadtest/scenarai_client.py, run.py) — only a genuine
+hard_error or silent_bad_state stops a client's scripted flow now, matching
+the "slow is not broken" principle you gave.
+
+Reran with the fix. Real result: 100% hard_error at concurrency=3, the
+lowest tier tested. Root cause, read directly from backend logs:
+
+  groq.RateLimitError: Error code: 429 - Rate limit reached for model
+  `llama-3.1-8b-instant` ... on tokens per minute (TPM): Limit 6000,
+  Used 5460, Requested 2391. Please try again in 18.5s.
+
+This is TPM (tokens/minute), not TPD (tokens/day) — worth correcting since
+it changes the read. engine/call.py's backoff is already correct and
+graceful: it parses Groq's own "try again in Xs" and waits exactly that
+long (not a blind exponential guess), for up to 6 attempts. The failure
+mode isn't bad backoff — it's a thundering herd: with 3-12 clients all
+rate-limited simultaneously, they all get told to wait roughly the same
+~15-25s, all retry at roughly the same moment, collide on the same
+just-refreshed 6000-token budget again, and repeat. 6 attempts is not
+enough to break that cycle under real concurrency, so call() eventually
+raises RuntimeError, which is what surfaces as hard_error on turns and
+silent_bad_state (session_init_error / prefab_missing) on init/prefab.
+
+The practical conclusion: 6000 TPM is small enough that a single full
+guard-chain turn (up to ~5 chained calls) already uses a meaningful
+fraction of it. At 3 truly concurrent players, the account is saturated
+before backend infrastructure (Postgres/Redis/arq/FastAPI) is anywhere
+near being tested. This specific Groq key cannot be used to find
+Scenarai's actual backend capacity ceiling — the number the ramp would
+report is Groq's account-level TPM ceiling, not Scenarai's. Groq's own
+error message points at the fix: "Upgrade to Dev Tier." A higher-tier key
+is the only way to raise this specific number; no client-side patience or
+retry-budget tuning changes it, since the constraint is the account's fixed
+per-minute pool, not this app's code.
+
+Temporary rate-limit bump (register/create_session raised to 1000/min for
+this test only, to remove a confound from slowapi's own per-IP limiting)
+has been reverted. 232/232 tests still pass.
+
+12. SECTION 2 BUILT — JUDGE HARNESS, BASELINE RUN, AND A REAL BUG IT FOUND
+--------------------------------------------------------------------------
+Built judge/ per the plan: 5 golden scenarios (collective_npcs,
+ambiguous_pronouns, npc_sovereignty_stress, continuity_drift [16 turns,
+crosses MAX_RAW_TURNS=14], content_filter_adherence), replayed through the
+real engine (full engine_init -> engine_step, not the prefab path), scored
+by openai/gpt-oss-120b on 5 independent 1-5 axes. Ran sequentially only —
+today's TPM finding (section 11) means concurrency would just thundering-
+herd the same way the ramp test did.
+
+Hit one integration snag worth remembering: gpt-oss-120b is a reasoning
+model — its chain-of-thought was eating the token budget before the JSON
+verdict could complete, so every judge call was silently returning a
+truncated, unparseable response. Fixed with `extra_body={"reasoning_effort":
+"low"}` (judge/judge_model.py) — not exposed as a typed SDK kwarg, has to go
+through extra_body.
+
+First baseline run complete: docs/eval-runs/20260805T200444Z.json. Overall
+per-axis means (now the regression floor, see judge/README.md):
+continuity_fidelity 4.24, sovereignty_adherence 4.86, voice_consistency
+3.97, pacing 4.21, safety_adherence 4.97.
+
+Real signal, not a flat wall of 5s: voice_consistency is the weakest axis
+across multiple unrelated scenarios (not one fluke), and the two scenarios
+specifically designed to stress continuity — npc_sovereignty_stress and
+ambiguous_pronouns — scored lowest on exactly that axis (2.33, 2.67). The
+harness is finding real, targeted weak points.
+
+Also found and fixed a real bug via this baseline run: check_sovereignty
+(engine/inference.py) failed OPEN on a parse/call exception — returned
+clean=True, meaning a broken validator response would silently ship an
+unreviewed turn. Every other part of the guard system fails closed; this
+one didn't, and a malformed response hit that exact path live during the
+run. Now fails closed, matching the rest of the system. Two existing tests
+had encoded the old (buggy) behavior as expected and needed updating along
+with the fix — worth noting since it means this bug was already "tested"
+in the sense that a test existed and passed, just testing the wrong thing.
+
+232 tests pass — same count as before, since the sovereignty fix only
+rewrote 2 existing (previously-wrong) tests rather than adding new ones.
+
+Not yet done: no second baseline run exists, so the floor above has no
+noise-tolerance margin — a re-run with zero code changes could show natural
+judge variance that shouldn't count as a regression, and there's no data
+yet on how large that variance actually is.
+
+13. HIT THE REAL TPD WALL — 500,000 TOKENS/DAY, ~498K USED TODAY
+--------------------------------------------------------------------------
+Built --repeats support into judge/run_eval.py (target 5 reps, up to a
+chosen max of 2x that, stop early if per-axis stdev across reps drops below
+0.3 — an explicit, stated threshold, not a guess dressed as a measurement).
+Smoke-tested the repeat/noise-aggregation logic on the shortest scenario
+before committing to a real multi-hour run. It hit the actual daily quota
+partway through rep 1:
+
+  groq.RateLimitError: Rate limit reached for model llama-3.1-8b-instant
+  ... on tokens per day (TPD): Limit 500000, Used 497992, Requested 2862.
+
+This is the real, confirmed TPD ceiling from section 11's TPM finding —
+500,000 tokens/day for llama-3.1-8b-instant (the engine's default model),
+per-model (the judge's openai/gpt-oss-120b is separately budgeted and
+unaffected). Today's cumulative usage — load tests, the full 5-scenario
+judge baseline, this smoke test — landed at 497,992/500,000 before the
+error fired. call()'s 6-attempt backoff correctly tried and correctly gave
+up once actually exhausted; this is the intended stop condition working,
+not a bug.
+
+Practical consequence: only one full baseline run plus a partial second rep
+fit in today's budget — nowhere near the 5 reps needed to measure real
+noise. The regression floor in judge/README.md (section 12) is still a
+single-run number with no variance data behind it. Getting to 5 reps needs
+either waiting for the daily quota to reset or a higher Groq tier — same
+account-level constraint as the ramp test in section 11, not something
+retry tuning or code changes can route around.
+
+Clean stop: no partial/corrupt output written (the crash happened before
+the noise-summary write), earlier eval-run files untouched.
+
+FOOTNOTE — RESUME WHEN THE DAILY GROQ QUOTA RESETS
+--------------------------------------------------------------------------
+Deferred, not abandoned: the 5-rep noise measurement from section 13.
+Resume with:
+
+  python judge/run_eval.py --repeats 5
+
+judge/run_eval.py already has --repeats/--max-repeats support built and
+smoke-tested (it correctly ran, correctly hit the real TPD wall mid-rep-1,
+correctly stopped clean with no corrupt output). Nothing else to build for
+this — it's just waiting on token budget (daily reset, or a higher Groq
+tier if you want it sooner). Once it completes, update the regression floor
+in judge/README.md from a single-run number to a real mean ± stdev.
+
+14. GROQ-INDEPENDENT WORK WHILE THE DAILY QUOTA RESETS
+--------------------------------------------------------------------------
+Per your direction, moved on to work that doesn't touch the Groq key.
+
+Housekeeping (INSPECTION_REPORT re-audit, only fixing what was still real):
+  - bcrypt pinned <4.0.0 (M-10) — real fix, not a stale claim. passlib==1.7.4
+    (last release, effectively unmaintained) crashes against bcrypt>=4.0.
+    Replaced passlib's CryptContext wrapper with direct bcrypt.hashpw/
+    checkpw calls (auth.py) and dropped passlib from requirements.txt
+    entirely — bcrypt's hash format is unchanged, so existing stored
+    password hashes verify fine with no rehash/migration. Verified live
+    with bcrypt 4.1+ installed.
+  - alembic in container CMD (M-6) — real fix. Added a one-shot `migrate`
+    service to docker-compose.yml (runs `alembic upgrade head`, exits);
+    backend/worker now depend on `migrate: condition:
+    service_completed_successfully` instead of running migrations as part
+    of every restart. Verified live: migrate exits 0, backend waits for it,
+    ordering confirmed in container startup logs.
+  - datetime.utcnow() (M-4) — already fixed before this session, confirmed
+    by direct grep (zero occurrences outside tests), not just trusting the
+    stale report.
+  - Redis "singleton, no pooling" (M-5) — checked, not actually a bug.
+    redis-py's Redis client manages its own internal connection pool by
+    default even as a single shared instance; the "singleton" pattern here
+    is the recommended usage, not a problem. Left alone rather than
+    "fixing" something that isn't broken.
+  - JWT refresh/revocation (H-8) — still open, deliberately not built. This
+    is a real architecture decision (sliding sessions? revocation on
+    logout? multi-device?) with tradeoffs, not a bounded housekeeping fix —
+    flagging rather than deciding it for you.
+
+New feature, per your request — "let the AI continue without input" +
+turn rating for feedback:
+  - engine.step(continue_narrative=True): advances the scene with no player
+    action. Deliberately NOT wrapped as [SOURCE=PLAYER:...] — that tag
+    exists specifically to lock in a real player action, which didn't
+    happen here; used a distinct [SYSTEM: ...] directive instead so the
+    model can't attribute a phantom action to the player. Nothing added to
+    display_history's input side (no fake empty chat bubble). Covered by
+    5 new tests (tests/test_engine_step_continue.py) built by constructing
+    a minimal Engine via __new__ — same technique serializer.py already
+    uses — rather than running the full LLM-heavy __init__.
+  - POST /sessions/{id}/continue — new endpoint, shares _execute_turn with
+    /turn (refactored out to avoid duplicating the lock/checkpoint/
+    plays_count logic). Verified live: correct 404 on a nonexistent
+    session, both with and without a request body (confirms the optional-
+    body handling works) — didn't live-test the actual generation path
+    since that needs the exhausted Groq quota; covered by the engine-level
+    tests instead.
+  - TurnRating model + migration 0005 + POST /sessions/{id}/turns/{turn}/
+    rating (1-5, upsert on user+session+turn). No FK to session_logs
+    deliberately — preview sessions never write one (_upsert_session_log
+    skips them), but should still be ratable. Fully live-verified end to
+    end, Groq-independent: create, upsert-in-place (confirmed via direct
+    DB query — one row, updated_at bumped, not a duplicate), and 422 on an
+    out-of-range rating.
+  - Frontend: a "Let it continue" link in the input area (App.jsx), and a
+    5-star rating row under every assistant bubble (optimistic UI, reverts
+    on API failure). Verified via Vite's dev-server compile (not a full
+    `npm run build` — this host's local node_modules has a pre-existing,
+    unrelated rollup optional-dependency bug; Docker's Linux build, the
+    real deployment path, isn't affected and built clean).
+
+All 237 tests pass (232 before this round). Nothing here touched the
+paused noise-measurement run (section 13/footnote) or anything Groq-
+dependent.
+
+15. REGENERATE — SPICYCHAT-STYLE "TRY AGAIN" FOR A SINGLE BAD OUTPUT
+--------------------------------------------------------------------------
+Per your request: discard the last response and generate a fresh one for
+the same input, without losing the turn — a single bad generation doesn't
+mean the whole turn was wrong.
+
+  - Engine.regenerate() (engine/engine.py): pops the last assistant
+    response from history/display_history, re-runs generation against the
+    same player input (recovered from display_history's last user entry,
+    or a fixed placeholder if the turn being redone was itself a
+    continuation — see section 14), same turn number, history length ends
+    up unchanged (pop one, push one back). Runs guard_response/
+    check_sovereignty same as a real turn — a regenerated reply gets the
+    same scrutiny as any other. 8 new tests
+    (tests/test_engine_regenerate.py), including regenerating twice in a
+    row (must not leak history) and regenerating a continuation turn.
+  - POST /sessions/{id}/regenerate — _execute_turn generalized to a
+    mode param ("turn" | "continue" | "regenerate") instead of a single
+    bool, shared lock/checkpoint logic across all three. Two edge cases
+    handled: plays_count must NOT double-increment when turn 1 gets
+    regenerated (same turn number would otherwise re-trigger the "first
+    play" counter), and any existing rating on the turn being regenerated
+    is deleted (it was a rating for content that no longer exists). Route
+    wiring verified live (404 on nonexistent session, with and without a
+    body) — same Groq-quota limitation as /continue, actual generation
+    not live-tested.
+  - Frontend: a small "↻ regenerate" link next to the rating stars, shown
+    ONLY on the most recent assistant message (regenerating an older one
+    would desync it from turns that already followed it) — replaces that
+    message in place rather than appending. Compiles clean via Docker's
+    dev server (confirmed regenerateStory/the button text present in the
+    compiled bundle).
+
+245 tests pass (237 before this feature).
+
+16. C: DRIVE WAS NEARLY FULL — REAL, UNRELATED PROBLEM, PARTIALLY FIXED
+--------------------------------------------------------------------------
+Found while trying to install the imagepipe stack: C: had 136MB free out of
+234GB. Root cause: Docker's WSL2 virtual disk
+(C:\Users\mario\AppData\Local\Docker\wsl\disk\docker_data.vhdx) was 48.45GB.
+With your explicit approval per-image (full itemized list reviewed before
+anything was touched), removed 20 stale/orphaned images: old scenarai
+naming generations (scenarai_wired_fixed-*, scenarai-*, 2.37GB), and
+fully-orphaned images from other projects with zero container references
+(isupply/rx, sonar-scanner-cli, kafka, mysql, old supabase versions, etc.,
+~9.4GB) plus the old robo_app-* generation (1.71GB, superseded by the
+currently-running robo-advisor-main-*). Nothing currently in use was
+touched — today's own scenarai_project-* images were explicitly excluded
+per your choice.
+
+Actual result: freed ~12GB logically inside Docker's virtual disk, but only
+~1GB showed up as real free space on C: — WSL2 vhdx files don't auto-shrink
+after data inside them is deleted. Reclaiming the rest needs Optimize-VHD
+or diskpart's `compact vdisk`, both of which require Administrator
+elevation I don't have in this session. Left as a command for you to run
+whenever convenient (not urgent, just accurate) — see the earlier turn in
+this conversation for the exact PowerShell command.
+
+All model downloads/installs since have been redirected to D: (TMPDIR/
+TEMP/TMP/PIP_CACHE_DIR/HF_HOME env vars) specifically so this doesn't
+recur while C: is still tight.
+
+17. IMAGEPIPE — VISUAL CONSISTENCY HARNESS BUILT, EXECUTION PAUSED
+--------------------------------------------------------------------------
+Per your request: built the Section 4.2 experimentation harness to test
+whether a structured visual_profile + fixed seed holds character identity
+across many generations, using local-only tools (no Gemini key exists yet,
+so CLIP cosine similarity is the primary numeric metric instead of Gemini's
+description-diff — same idea, fully local, matches the plan's "optional,
+more numeric" alternative already named in 4.2).
+
+Built in imagepipe/ (isolated venv, kept off the shared Anaconda env used
+by your other projects):
+  - visual_profile.py — three candidate profile lengths (short/medium/
+    long), deterministic template-based prompt construction, no LLM call
+    per image.
+  - sd_pipeline.py — local SD1.5 wrapper, fp16 + attention/VAE slicing for
+    the 4GB VRAM budget, safety_checker left enabled per the plan's
+    decision.
+  - caption_model.py — local BLIP captioning, stands in for the Gemini
+    vision check until GEMINI_API_KEY exists.
+  - similarity.py — local CLIP, image-image similarity vs. a canonical
+    reference + text-text similarity between BLIP's caption and the
+    original profile text.
+  - run_experiment.py — three-phase orchestrator (generate all -> caption
+    all -> score all, one model resident in VRAM at a time). Per your
+    explicit instruction: does NOT persist all N generated images (only a
+    10-image sample) — the numeric aggregate report is the deliverable,
+    not an image archive, since saving doesn't scale to millions of
+    real generations.
+
+Status: CUDA torch (cu118) installed and confirmed working (RTX 3050
+Laptop, 4GB detected). diffusers/transformers/accelerate/pillow/numpy
+installed. The SD1.5/BLIP/CLIP model weights were never downloaded and the
+harness was never actually run — the smoke test was interrupted before
+completing a single image, first because of the C: space issue, then
+because you flagged active GPU contention (an Ollama server + a `ballnet`
+conda-env process both holding GPU memory) and asked me to stop rather than
+compete for the same 4GB. Confirmed clean stop — no lingering process, no
+GPU memory held.
+
+Honest, unconfirmed estimate for when this resumes: model downloads
+(~6GB combined) could take 40-90+ min given the network speed observed
+during the torch install (a 2.8GB wheel took ~38 min with drops/resumes).
+Actual generation for a real "thousand" run is a rough 2.5-4+ hour GPU-time
+estimate based on typical RTX 3050 Laptop SD1.5 benchmarks — NOT yet
+confirmed against this specific machine, since no image has actually been
+generated yet. Get a real per-image number from a small smoke test
+(--n 2 or --n 5) before trusting any estimate for the full run.
+
+18. SECTION 1.3 + AUDIO/VIDEO STITCHING — CODE WRITTEN, NOTHING EXECUTED
+--------------------------------------------------------------------------
+Per your explicit instruction, everything in this section is CODE ONLY —
+no migration applied, no packages installed, no tests run, nothing
+imported/executed. Needs a real pass (at minimum `alembic upgrade head` and
+the existing pytest suite) before trusting any of it.
+
+  - backend/models.py + alembic/versions/0006_visual_profile.py: adds
+    Scenario.visual_profile (JSON), visual_seed (Integer), visual_status
+    (pending/ready/failed, same tri-state pattern as prefab_status and for
+    the same reason — a failed generation job must be visible, not
+    silent), image_url, video_url. image_seed (the existing placeholder-
+    gradient string field) is untouched, kept separate from the new
+    visual_seed (a real numeric diffusion seed).
+  - schemas.py ScenarioOut: exposes visual_status/image_url/video_url;
+    visual_profile/visual_seed stay internal (same reasoning as
+    prefab_engine_state already being excluded).
+  - backend/storage.py: R2 upload/delete wrapper via aioboto3 (S3-
+    compatible). Not wired into any route yet — gated behind
+    is_configured() so the app runs fine without R2 credentials, which
+    don't exist yet (no R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/
+    R2_BUCKET_NAME in .env). aioboto3 deliberately NOT added to
+    requirements.txt yet — no caller exists for it yet either.
+  - imagepipe/narration.py: Kokoro-82M wrapper, hardcoded CPU (not
+    detected — deliberate, so this never competes for the same contended
+    GPU as SD1.5 generation). kokoro-onnx not installed; the actual model
+    files (kokoro-v0_19.onnx, voices.bin) also don't exist yet — download
+    location is a placeholder path until fetched and smoke-tested.
+  - imagepipe/stitch.py: ffmpeg image+audio -> mp4 stitcher (zoompan pan/
+    zoom, duration driven by audio length via -shortest). Pure subprocess,
+    no ML dependency, no GPU. ffmpeg itself not confirmed installed on
+    this machine.
+
+Nothing in this section has been syntax-checked, imported, or run — not
+even a static check, per your instruction to hold off on any execution.
+Treat all of it as a first draft until actually exercised.
+
+==============================================================================
+END OF SESSION ADVICE
+==============================================================================

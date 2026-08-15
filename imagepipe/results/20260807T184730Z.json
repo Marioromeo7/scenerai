@@ -1,0 +1,30 @@
+{
+  "long": {
+    "field_set": "long",
+    "n": 1000,
+    "prompt": "long silver hair, loosely braided, pale grey eyes, tall, lean build, dark green traveling cloak over leather armor, muted green and grey tones, painterly digital fantasy illustration, guarded, watchful expression, a thin scar across the left eyebrow, portrait, single character, plain background",
+    "profile_text": "long silver hair, loosely braided, pale grey eyes, tall, lean build, dark green traveling cloak over leather armor, muted green and grey tones, painterly digital fantasy illustration, guarded, watchful expression, a thin scar across the left eyebrow",
+    "steps": 20,
+    "generation_seconds": 6923.6,
+    "seconds_per_image": 6.92,
+    "image_similarity_to_canonical": {
+      "mean": 0.8221,
+      "stdev": 0.0614,
+      "min": 0.4422,
+      "max": 0.9432
+    },
+    "caption_similarity_to_profile": {
+      "mean": 0.6576,
+      "stdev": 0.0529,
+      "min": 0.4171,
+      "max": 0.7833
+    },
+    "sample_captions": [
+      "a man with long white hair and a beard",
+      "the witch king by theartion",
+      "a man with long hair and a beard",
+      "a man with long hair and green eyes",
+      "a man with long white hair and a green shirt"
+    ]
+  }
+}

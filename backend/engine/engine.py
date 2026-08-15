@@ -13,7 +13,7 @@ from .inference import (
     translate_input, translate_output,
     parse_opening_appearance, scan_opening_for_npcs,
     infer_characters, preprocess, build_system,
-    check_sovereignty, summarize_async, extract_and_save_assumptions,
+    check_sovereignty, summarize_chunk, extract_and_save_assumptions,
     sanitize_input, guard_response,
 )
 
@@ -66,16 +66,45 @@ class Engine:
         self._print_init_report(opening)
 
     # ── Core turn ─────────────────────────────────────────────
-    def step(self, raw_input):
-        raw_input = sanitize_input(raw_input)
+    def step(self, raw_input, continue_narrative=False):
+        """continue_narrative=True: no player input this turn — the player
+        wants the narrator to keep going on its own (a "continue" button, not
+        a scripted action). Deliberately NOT wrapped as [SOURCE=PLAYER:...] —
+        that tag exists precisely to lock in that the player performed a
+        specific action, which isn't true here; wrapping it that way would
+        let the model attribute a phantom action to the player. Nothing is
+        appended to display_history for this turn's "input" side — there is
+        no player message to show as a chat bubble."""
+        if not continue_narrative:
+            raw_input = sanitize_input(raw_input)
 
         with self._lock:
             self.turn += 1
             self.metrics['turns'] += 1
 
-            self.scene_lang  = detect_from_player_input(raw_input, self.scene_lang)
-            english_input    = translate_input(raw_input, self.scene_lang)
-            parsed           = preprocess(english_input, self.persona, self.entities, self.last_target)
+            if continue_narrative:
+                parsed = {
+                    'clean': '(no player input — narrator continues the scene)',
+                    'target': self.last_target, 'actions': [], 'spoken': [], 'thoughts': [],
+                    'same_space_risk': any(
+                        e.pronouns == self.persona.pronouns and e.present and not e.is_player
+                        for e in self.entities
+                    ),
+                }
+                msg = (
+                    '[SYSTEM: The player takes no action this turn. Continue the scene '
+                    'naturally — advance time, deepen the moment, let other characters or '
+                    f'the environment act. Do not attribute any new action, decision, or '
+                    f'dialogue to {self.persona.name}; they remain exactly as they were '
+                    'left at the end of the previous turn.]'
+                )
+            else:
+                self.scene_lang  = detect_from_player_input(raw_input, self.scene_lang)
+                english_input    = translate_input(raw_input, self.scene_lang)
+                parsed           = preprocess(english_input, self.persona, self.entities, self.last_target)
+                msg = parsed['annotated']
+                if parsed['thoughts']:
+                    msg += '\n(internal context only, do not reference: ' + ' | '.join(parsed['thoughts']) + ')'
             self.last_target = parsed['target']
 
             system = build_system(
@@ -86,12 +115,9 @@ class Engine:
                 content_filter=self.filter,
             )
 
-            msg = parsed['annotated']
-            if parsed['thoughts']:
-                msg += '\n(internal context only, do not reference: ' + ' | '.join(parsed['thoughts']) + ')'
-
             self.history.append({'role': 'user', 'content': msg})
-            self.display_history.append({'role': 'user', 'content': parsed['clean']})
+            if not continue_narrative:
+                self.display_history.append({'role': 'user', 'content': parsed['clean']})
             hot = self.history[-MAX_RAW_TURNS:]
             previous_response = next(
                 (m['content'] for m in reversed(self.display_history[:-1]) if m.get('role') == 'assistant'),
@@ -118,19 +144,100 @@ class Engine:
             self.history.append({'role': 'assistant', 'content': response})
             self.display_history.append({'role': 'assistant', 'content': response})
 
-            extract_and_save_assumptions(response, self.persona, self.entities, lock=self._lock)
-
+            chunk_to_summarize = None
             if len(self.history) > MAX_RAW_TURNS:
-                chunk        = self.history[:-MAX_RAW_TURNS]
-                summarize_async(chunk, self.persona.name, self.memory)
+                chunk_to_summarize = self.history[:-MAX_RAW_TURNS]
                 self.history = self.history[-MAX_RAW_TURNS:]
                 self.metrics['compressions'] += 1
 
-            return {
+            turn_result = {
                 'turn': self.turn, 'response': response,
                 'latency': latency, 'sovereign': sv['clean'],
                 'violations': sv['violations'], 'parsed': parsed,
             }
+
+        # Outside self._lock (it's not reentrant): both calls below are
+        # synchronous and must complete before step() returns, so their
+        # mutations exist before the caller's serialize_engine() runs.
+        # Previously fire-and-forget on daemon threads, which meant they
+        # almost always lost the race against serialization and were
+        # silently discarded — see summarize_chunk / extract_and_save_assumptions.
+        extract_and_save_assumptions(response, self.persona, self.entities, lock=self._lock)
+        if chunk_to_summarize is not None:
+            summarize_chunk(chunk_to_summarize, self.persona.name, self.memory)
+
+        return turn_result
+
+    def regenerate(self):
+        """Discard the last turn's response and generate a fresh one for the
+        SAME player input — a single bad generation doesn't have to mean the
+        whole turn was wrong; try again and see (the SpicyChat-style "redo"
+        pattern). Same turn number, not a new turn: self.turn/metrics['turns']
+        are untouched, and history/display_history end up the same length
+        they started at (pop one assistant reply, append one back)."""
+        with self._lock:
+            if not self.history or self.history[-1]['role'] != 'assistant':
+                raise ValueError('No turn to regenerate — nothing has been said yet')
+            self.history.pop()
+            if self.display_history and self.display_history[-1]['role'] == 'assistant':
+                self.display_history.pop()
+
+            if not self.history or self.history[-1]['role'] != 'user':
+                raise ValueError('No player turn found to regenerate')
+
+            # A continuation turn (see step()) never added a user-role entry to
+            # display_history — its absence at the top, post-pop, is the signal.
+            is_continuation = not (self.display_history and self.display_history[-1]['role'] == 'user')
+            player_input_for_guard = (
+                '(no player input — narrator continues the scene)' if is_continuation
+                else self.display_history[-1]['content']
+            )
+
+            same_space_risk = any(
+                e.pronouns == self.persona.pronouns and e.present and not e.is_player
+                for e in self.entities
+            )
+            system = build_system(
+                self.persona, self.entities, self.world,
+                self.memory, self.layer1,
+                same_space_risk=same_space_risk,
+                scene_lang=self.scene_lang,
+                content_filter=self.filter,
+            )
+            hot = self.history[-MAX_RAW_TURNS:]
+            previous_response = next(
+                (m['content'] for m in reversed(self.display_history) if m.get('role') == 'assistant'),
+                '',
+            )
+
+            response_en, latency = call(system, hot)
+            response             = translate_output(response_en, self.scene_lang)
+            self.metrics['latencies'].append(latency)
+            response, guard = guard_response(
+                response, player_input_for_guard, self.persona, self.entities,
+                self.world, self.memory, self.layer1, self.scene_lang,
+                previous_response=previous_response,
+            )
+            if guard.get('revised'):
+                logger.warning('Continuity guard revised regenerated response: %s', guard.get('violations'))
+
+            sv = check_sovereignty(response, self.persona.name, self.entities)
+            if not sv['clean']:
+                self.metrics['sv_violations'] += sv['count']
+                logger.warning('Sovereignty violation leaked through guard (hard block, regenerate): %s', sv['violations'])
+                response = 'A tense silence holds. Nothing moves.'
+
+            self.history.append({'role': 'assistant', 'content': response})
+            self.display_history.append({'role': 'assistant', 'content': response})
+
+            turn_result = {
+                'turn': self.turn, 'response': response,
+                'latency': latency, 'sovereign': sv['clean'],
+                'violations': sv['violations'],
+            }
+
+        extract_and_save_assumptions(response, self.persona, self.entities, lock=self._lock)
+        return turn_result
 
     # ── Helpers ───────────────────────────────────────────────
     def pin(self, fact):
@@ -241,7 +348,7 @@ class Engine:
             if e.appearance:      logger.info(f'    Appearance   : {e.appearance[:120]}')
             if e.mood:            logger.info(f'    Mood         : {e.mood}')
             if e.behavioral_read: logger.info(f'    Behavioral   : {e.behavioral_read[:150]}')
-            if e.never_does:      logger.info(f'    NEVER        : {e.never_does}')
+            if e.never_does:      logger.info(f'    NEVER        : {e.never_does}  (resolve {e.integrity_resolve * 100:.0f}%)')
         logger.info('  MEMORY')
         for f in self.memory.pinned:
             logger.info(f'  PIN: {f}')

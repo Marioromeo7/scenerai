@@ -111,6 +111,62 @@ class TestContinuityViolation:
         assert meta['revised'] is True
 
 
+# ── Near-duplicate repair escalates to fallback ────────────────
+# In production, a repair pass re-used an entire prior paragraph verbatim
+# with just a sentence appended, passed re-validation cleanly, and shipped
+# as-is — _same_raw_response's exact-match check never saw it as a repeat.
+
+class TestNearDuplicateRepair:
+    def test_repair_reusing_previous_response_escalates_to_fallback(self):
+        persona, entities, world, memory, layer1 = _fixtures()
+        previous = (
+            'Iris nods once, her gaze steady, and returns to the ledger without '
+            'another word, the silence settling comfortably between you.'
+        )
+        # Repair reuses the entire previous response almost verbatim, tacking on
+        # one extra sentence — a real repeat a human reader would notice instantly.
+        near_duplicate_repair = previous + ' She closes the book.'
+
+        with patch('engine.inference.call') as mock:
+            mock.side_effect = [
+                (SOVEREIGN, 0.1),                 # sovereignty: clean
+                (INVALID, 0.1),                   # continuity: violated
+                (near_duplicate_repair, 0.2),     # repair: near-duplicate of previous
+                (SOVEREIGN, 0.1),                 # sovereignty on repair: clean
+                (VALID, 0.1),                     # continuity re-validation on repair: clean
+                ('Iris looks away, saying nothing new.', 0.2),  # fallback: genuinely different
+            ]
+            result, meta = guard_response(
+                'Describe the archive.', 'Describe inside.', persona, entities, world, memory, layer1,
+                previous_response=previous,
+            )
+
+        assert result == 'Iris looks away, saying nothing new.'
+        assert meta.get('fallback') is True
+
+    def test_repair_not_similar_to_previous_is_not_escalated(self):
+        """Sanity check: a genuinely different, clean repair must NOT be routed
+        through fallback just because a previous_response exists."""
+        persona, entities, world, memory, layer1 = _fixtures()
+        previous = 'Iris nods once and returns to the ledger.'
+
+        with patch('engine.inference.call') as mock:
+            mock.side_effect = [
+                (SOVEREIGN, 0.1),
+                (INVALID, 0.1),
+                ('A cold wind moves through the archive, and Iris shivers.', 0.2),  # unrelated repair
+                (SOVEREIGN, 0.1),
+                (VALID, 0.1),
+            ]
+            result, meta = guard_response(
+                'Describe the archive.', 'Describe inside.', persona, entities, world, memory, layer1,
+                previous_response=previous,
+            )
+
+        assert result == 'A cold wind moves through the archive, and Iris shivers.'
+        assert meta.get('fallback') is not True
+
+
 # ── Fallback path ─────────────────────────────────────────────
 
 class TestFallback:

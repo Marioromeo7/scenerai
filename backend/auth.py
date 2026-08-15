@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import bcrypt
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,11 +12,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-pwd_context   = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
 
-def hash_password(p): return pwd_context.hash(p)
-def verify_password(plain, hashed): return pwd_context.verify(plain, hashed)
+# Direct bcrypt, not passlib's CryptContext wrapper — passlib==1.7.4 (last
+# release, effectively unmaintained) crashes against bcrypt>=4.0 with
+# AttributeError: module 'bcrypt' has no attribute '__about__', which is why
+# bcrypt was pinned <4.0.0 (INSPECTION_REPORT M-10), locking out security
+# patches indefinitely. bcrypt's own hash format is unchanged across this
+# boundary, so existing stored hashes verify fine with no rehash/migration.
+def hash_password(p: str) -> str:
+    return bcrypt.hashpw(p.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 def create_token(user_id):
     exp = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
@@ -35,4 +43,12 @@ async def get_current_user(
     result = await db.execute(select(User).where(User.id == user_id))
     user   = result.scalar_one_or_none()
     if not user: raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """403, not 404 -- an admin endpoint's existence isn't a secret worth
+    hiding, only its data is."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     return user

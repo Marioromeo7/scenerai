@@ -3,10 +3,33 @@
 backend.env
 postgres.env
 redis.env
+frontend.env
 
 # Database dumps
 *.sql
 *.dump
+*.sql.gz
+backups/
+
+# Per-turn generated media (image/audio/video) -- user-facing AI-generated
+# content written by worker.py/main.py's export endpoint to ./media, bind-
+# mounted into worker/backend/nginx (see docker-compose.yml). Grows
+# unbounded with usage and belongs in real storage (R2, eventually — see
+# storage.py), never in git.
+media/
+
+# imagepipe — isolated research venv + downloaded model weights, not source.
+# .hf_cache alone is 15GB (SD1.5 + inpainting + BLIP + CLIP), .venv is 6GB,
+# .kokoro_models is 338MB — committing any of these would make the repo
+# nearly unclonable. results/ (experiment JSON, ~112KB) is intentionally
+# NOT excluded — that's real findings, not a cache, worth keeping.
+imagepipe/.venv/
+imagepipe/.hf_cache/
+imagepipe/.kokoro_models/
+imagepipe/.mediapipe_models/
+imagepipe/.pipcache/
+imagepipe/.tmp/
+imagepipe/sample_images/
 
 # Test artifacts
 .coverage
@@ -46,3 +69,10 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local-only compose overrides (e.g. port remaps to dodge conflicts with other projects)
+docker-compose.override.yml
+
+# Load test output
+loadtest/thresholds.json
+loadtest/report.json

@@ -1,21 +1,13 @@
-"""Tests for extract_and_save_assumptions and summarize_async helpers."""
+"""Tests for extract_and_save_assumptions and summarize_chunk helpers.
+
+Both used to run on daemon threads (fire-and-forget) — that meant their
+mutations almost always lost the race against serialize_engine() running
+immediately after step() returned, and were silently discarded every turn.
+Both are now synchronous; no thread-waiting scaffolding needed anymore."""
 import threading
-import time
-import pytest
-from unittest.mock import patch, MagicMock
-from engine.inference import extract_and_save_assumptions, summarize_async
+from unittest.mock import patch
+from engine.inference import extract_and_save_assumptions, summarize_chunk
 from engine.types import Entity, Memory
-
-
-def _wait_for_threads(timeout=2.0):
-    """Let daemon threads spawned by helpers finish."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        alive = [t for t in threading.enumerate()
-                 if t.daemon and t.name != 'MainThread' and t.is_alive()]
-        if not alive:
-            break
-        time.sleep(0.05)
 
 
 # ── extract_and_save_assumptions ──────────────────────────────
@@ -35,7 +27,6 @@ class TestExtractAndSaveAssumptions:
                 '{"stable": {"Iris": ["silver hair pins"]}, "physical": {}}', 0.1
             )
             extract_and_save_assumptions('Iris adjusts her silver pins.', entities[0], entities)
-            _wait_for_threads()
 
         assert 'silver hair pins' in iris.saved_assumptions
 
@@ -49,7 +40,6 @@ class TestExtractAndSaveAssumptions:
                 '{"stable": {"Iris": ["silver hair pins"]}, "physical": {}}', 0.1
             )
             extract_and_save_assumptions('Iris adjusts her pins.', entities[0], entities)
-            _wait_for_threads()
 
         assert iris.saved_assumptions.count('silver hair pins') == 1
 
@@ -62,7 +52,6 @@ class TestExtractAndSaveAssumptions:
                 '{"stable": {}, "physical": {"Iris": "bleeding from a cut on her hand"}}', 0.1
             )
             extract_and_save_assumptions('Iris cuts her hand.', entities[0], entities)
-            _wait_for_threads()
 
         assert iris.physical_state == 'bleeding from a cut on her hand'
 
@@ -75,7 +64,6 @@ class TestExtractAndSaveAssumptions:
                 '```json\n{"stable": {"Iris": ["black gloves"]}, "physical": {}}\n```', 0.1
             )
             extract_and_save_assumptions('Iris wears black gloves.', entities[0], entities)
-            _wait_for_threads()
 
         assert 'black gloves' in iris.saved_assumptions
 
@@ -85,7 +73,6 @@ class TestExtractAndSaveAssumptions:
         with patch('engine.inference.call') as mock:
             mock.return_value = ('not json', 0.1)
             extract_and_save_assumptions('Something happened.', entities[0], entities)
-            _wait_for_threads()
 
         # Should not raise; entities unchanged
         assert entities[1].saved_assumptions == []
@@ -100,7 +87,6 @@ class TestExtractAndSaveAssumptions:
                 '{"stable": {"Iris": ["reading glasses"]}, "physical": {}}', 0.1
             )
             extract_and_save_assumptions('Iris puts on glasses.', entities[0], entities, lock=lock)
-            _wait_for_threads()
 
         assert 'reading glasses' in iris.saved_assumptions
 
@@ -112,7 +98,6 @@ class TestExtractAndSaveAssumptions:
                 '{"stable": {"Unknown": ["some detail"]}, "physical": {}}', 0.1
             )
             extract_and_save_assumptions('Someone passes by.', entities[0], entities)
-            _wait_for_threads()
 
         assert entities[0].saved_assumptions == []
         assert entities[1].saved_assumptions == []
@@ -122,16 +107,81 @@ class TestExtractAndSaveAssumptions:
 
         with patch('engine.inference.call') as mock:
             mock.side_effect = RuntimeError('API down')
-            # Should not propagate — thread swallows it
             extract_and_save_assumptions('Something happened.', entities[0], entities)
-            _wait_for_threads()
 
         assert entities[1].saved_assumptions == []
 
+    def test_name_matched_case_insensitively(self):
+        """A model returning 'iris' or 'IRIS' instead of the exact-cased 'Iris'
+        must still match — this used to silently drop the update entirely."""
+        entities = self._entities()
+        iris = entities[1]
 
-# ── summarize_async ───────────────────────────────────────────
+        with patch('engine.inference.call') as mock:
+            mock.return_value = (
+                '{"stable": {"iris": ["a small scar"]}, "physical": {}}', 0.1
+            )
+            extract_and_save_assumptions('Iris turns her head.', entities[0], entities)
 
-class TestSummarizeAsync:
+        assert 'a small scar' in iris.saved_assumptions
+
+    # ── resolve_shift (integrity erosion) ──────────────────────
+
+    def test_resolve_shift_applied_for_tracked_npc(self):
+        entities = self._entities()
+        iris = entities[1]
+        iris.never_does = 'would never yield the archive key'
+
+        with patch('engine.inference.call') as mock:
+            mock.return_value = (
+                '{"stable": {}, "physical": {}, '
+                '"resolve_shift": {"Iris": {"delta": -0.1, "reason": "showed vulnerability"}}}', 0.1
+            )
+            extract_and_save_assumptions('Iris hesitates, her composure cracking.', entities[0], entities)
+
+        assert iris.integrity_resolve == 0.9
+        assert iris.integrity_notes == ['showed vulnerability']
+
+    def test_resolve_shift_ignored_for_untracked_npc(self):
+        """No never_does rule means nothing to erode — resolve_shift for this
+        character (if the model hallucinates one anyway) must be a no-op."""
+        entities = self._entities()
+        iris = entities[1]  # no never_does set
+
+        with patch('engine.inference.call') as mock:
+            mock.return_value = (
+                '{"stable": {}, "physical": {}, '
+                '"resolve_shift": {"Iris": {"delta": -0.5, "reason": "irrelevant"}}}', 0.1
+            )
+            extract_and_save_assumptions('Something happens.', entities[0], entities)
+
+        assert iris.integrity_resolve == 1.0
+
+    def test_resolve_shift_survives_the_full_pipeline_with_lock(self):
+        """The glue between the LLM call and _apply_resolve_shifts, exercised
+        end to end with the lock argument engine.step() actually passes."""
+        entities = self._entities()
+        iris = entities[1]
+        iris.never_does = 'would never surrender her power over the archive'
+        lock = threading.Lock()
+
+        with patch('engine.inference.call') as mock:
+            mock.return_value = (
+                '{"stable": {"Iris": ["a bronze key"]}, "physical": {}, '
+                '"resolve_shift": {"Iris": {"delta": -0.15, "reason": "trusted a stranger"}}}', 0.1
+            )
+            extract_and_save_assumptions(
+                'Iris presses the key into your hand.', entities[0], entities, lock=lock
+            )
+
+        assert 'a bronze key' in iris.saved_assumptions
+        assert iris.integrity_resolve == 0.85
+        assert iris.integrity_notes == ['trusted a stranger']
+
+
+# ── summarize_chunk ────────────────────────────────────────────
+
+class TestSummarizeChunk:
     def _chunk(self):
         return [
             {'role': 'user',      'content': 'Where did you come from?'},
@@ -147,8 +197,7 @@ class TestSummarizeAsync:
                 ('silence, refusal, tension', 0.1),        # beats
                 ('YES', 0.1),                              # quality check
             ]
-            summarize_async(self._chunk(), 'Alex', memory)
-            _wait_for_threads()
+            summarize_chunk(self._chunk(), 'Alex', memory)
 
         assert len(memory.summaries) == 1
         assert 'Iris refused to answer.' in memory.summaries[0]
@@ -163,8 +212,7 @@ class TestSummarizeAsync:
                 ('NO', 0.1),                               # quality check fails
                 ('Iris refused to answer Alex.', 0.1),     # retry summary
             ]
-            summarize_async(self._chunk(), 'Alex', memory)
-            _wait_for_threads()
+            summarize_chunk(self._chunk(), 'Alex', memory)
 
         assert memory.summaries == ['Iris refused to answer Alex.']
 
@@ -173,10 +221,9 @@ class TestSummarizeAsync:
 
         with patch('engine.inference.call') as mock:
             mock.side_effect = RuntimeError('API down')
-            summarize_async(self._chunk(), 'Alex', memory)
-            _wait_for_threads()
+            summarize_chunk(self._chunk(), 'Alex', memory)
 
-        # Exception in daemon thread — memory unchanged, no crash
+        # Exception raised and caught inline — memory unchanged, no crash
         assert memory.summaries == []
 
 
@@ -201,7 +248,6 @@ class TestFallbackDedup:
         prev = 'A tense silence holds.'
 
         VIOLATED  = '{"clean": false, "violations": ["narrator moved player"]}'
-        SOVEREIGN = '{"clean": true, "violations": []}'
         VALID     = '{"valid": true, "violations": []}'
 
         with patch('engine.inference.call') as mock:
@@ -228,7 +274,6 @@ class TestFallbackDedup:
         prev = 'A tense silence holds.'
 
         VIOLATED  = '{"clean": false, "violations": ["moved"]}'
-        SOVEREIGN = '{"clean": true, "violations": []}'
         VALID     = '{"valid": true, "violations": []}'
 
         with patch('engine.inference.call') as mock:

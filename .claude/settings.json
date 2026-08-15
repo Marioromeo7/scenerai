@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(docker:*)",
+      "Bash(docker compose:*)",
+      "Bash(alembic:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)"
+    ]
+  }
+}

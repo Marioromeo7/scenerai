@@ -60,6 +60,11 @@ class TestEntity:
         assert 'tense' not in block
         assert 'archive' not in block
 
+    def test_integrity_resolve_defaults_to_intact(self):
+        e = Entity(name='Iris', pronouns='she/her', never_does='would never yield the key')
+        assert e.integrity_resolve == 1.0
+        assert e.integrity_notes == []
+
 
 class TestWorldState:
     def test_block_all_fields(self):

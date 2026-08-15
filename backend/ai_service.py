@@ -16,12 +16,48 @@ from engine.inference import (
     detect_from_player_input,
     translate_input, translate_output,
     preprocess, build_system,
-    check_sovereignty, extract_and_save_assumptions, summarize_async,
+    check_sovereignty, extract_and_save_assumptions, summarize_chunk,
     guard_response, sanitize_input,
 )
 from engine.call import async_stream_call
+from engine.visual_prompts import build_scene_image_prompt
+from engine.voice_prompts import get_voice_profile, filter_for_narration
+from database import get_redis
+from rate_limiter import reserve_token_budget
 
 logger = logging.getLogger(__name__)
+
+# Conservative flat reservation for a whole turn, not a single Groq call --
+# engine.step()/regenerate() make several internal call() invocations
+# (narrative response, guard validation, occasional summarization), each
+# funneling through engine/call.py individually. Retrofitting the reservation
+# into every one of those ~20 call sites would be invasive; reserving once
+# per turn at this single choke point (every turn passes through here before
+# entering the sync engine) is the safer trade: slightly less precise, but
+# serializes concurrent turns at the right granularity without touching the
+# engine internals. call()'s existing retry-on-429 remains the fine-grained
+# safety net for any single call that still overshoots.
+# 4000 = the upper end of the real measured per-turn range (see
+# rate_limiter.py's docstring / SESSION_SUMMARY.md), not a guess.
+TURN_TOKEN_ESTIMATE = 4000
+# engine_prefab/engine_init run 15-20 internal Groq calls (full context-layer
+# build) rather than a turn's 2-4 -- scaled up proportionally, not a separate
+# measurement. engine_prefab already has its own concurrency gate
+# (worker.py's PREFAB_MAX=2), this is a second, independent layer against
+# the same TPM ceiling, not a replacement for it.
+FULL_INIT_TOKEN_ESTIMATE = 20000
+
+
+async def _reserve_turn_budget(estimated_tokens: int = TURN_TOKEN_ESTIMATE):
+    """Blocks until there's room in the current minute's Groq TPM budget.
+    Raises RuntimeError (not silently proceeds) if the queue doesn't clear
+    within reserve_token_budget's max_wait -- callers should surface that
+    as a capacity/retry message, not let the turn fire into a near-certain
+    429 storm."""
+    redis = await get_redis()
+    ok = await reserve_token_budget(redis, estimated_tokens, max_wait=60.0 if estimated_tokens > TURN_TOKEN_ESTIMATE else 30.0)
+    if not ok:
+        raise RuntimeError("Groq capacity is fully booked right now — try again shortly.")
 
 # Engine models available for play
 ENGINE_MODELS = {
@@ -92,6 +128,7 @@ async def engine_init(
     if not settings.groq_api_key:
         raise RuntimeError("GROQ_API_KEY not set")
 
+    await _reserve_turn_budget(FULL_INIT_TOKEN_ESTIMATE)
     # Point engine's call() at the chosen model
     init_client(settings.groq_api_key, engine_model)
 
@@ -134,6 +171,7 @@ async def engine_prefab(
     """
     if not settings.groq_api_key:
         return None
+    await _reserve_turn_budget(FULL_INIT_TOKEN_ESTIMATE)
     init_client(settings.groq_api_key, DEFAULT_ENGINE_MODEL)
     from engine.types import ContentFilter, FilterState
     scenario = Scenario(
@@ -164,6 +202,7 @@ async def engine_init_from_prefab(
     """
     import copy
     from engine.call import call
+    await _reserve_turn_budget(estimated_tokens=1500)  # single call -- appearance highlights only
     init_client(settings.groq_api_key, engine_model)
 
     state = copy.deepcopy(prefab_state)
@@ -217,21 +256,52 @@ async def engine_init_from_prefab(
 
 # ── Engine turn ───────────────────────────────────────────────
 
+def _build_turn_media_context(engine, response_text: str) -> dict | None:
+    """Picks a focus entity for the turn's image (the first present,
+    non-collective NPC -- the player is the narrative "camera" per the
+    engine's own sovereignty design, so depicting the player themselves
+    isn't the natural default; depicting who they're looking at is) and
+    builds the image prompt + narration text + voice from it. Returns
+    None if there's no NPC to depict yet (e.g. an empty opening scene) --
+    callers should skip enqueuing media for that turn rather than guess."""
+    focus = next(
+        (e for e in engine.entities if e.present and not e.is_player and not e.is_collective),
+        None,
+    )
+    if focus is None:
+        return None
+    image_prompt = build_scene_image_prompt(focus)
+    voice = get_voice_profile(focus)
+    narration_text = filter_for_narration(response_text)
+    if not narration_text:
+        return None
+    return {
+        "image_prompt": image_prompt,
+        "narration_text": narration_text,
+        "voice_id": voice["voice_id"],
+        "voice_speed": voice["speed"],
+    }
+
+
 async def engine_step(
     engine_state: dict,
-    player_input: str,
+    player_input: str = "",
     engine_model: str = DEFAULT_ENGINE_MODEL,
+    continue_narrative: bool = False,
 ) -> dict:
     """
     Runs one turn through the full engine.
     Deserializes state from Redis, calls engine.step(), returns
-    updated state + response.
+    updated state + response. continue_narrative=True: no player input this
+    turn — the narrator advances the scene on its own (see engine.step()).
     """
+    await _reserve_turn_budget()
     # Re-point call() at the model for this turn
     init_client(settings.groq_api_key, engine_model)
 
     engine = deserialize_engine(engine_state)
-    result = await asyncio.to_thread(engine.step, player_input)
+    result = await asyncio.to_thread(engine.step, player_input, continue_narrative)
+    media_context = _build_turn_media_context(engine, result["response"])
 
     return {
         "response":    result["response"],
@@ -239,6 +309,34 @@ async def engine_step(
         "violations":  result["violations"],
         "turn":        result["turn"],
         "engine_state": serialize_engine(engine),
+        "media_context": media_context,
+    }
+
+
+async def engine_regenerate(
+    engine_state: dict,
+    engine_model: str = DEFAULT_ENGINE_MODEL,
+) -> dict:
+    """
+    Discards the last turn's response and generates a fresh one for the same
+    player input (see engine.regenerate()) — same shape as engine_step's
+    return so callers don't need to special-case it. Raises ValueError if
+    there's no turn yet to regenerate.
+    """
+    await _reserve_turn_budget()
+    init_client(settings.groq_api_key, engine_model)
+
+    engine = deserialize_engine(engine_state)
+    result = await asyncio.to_thread(engine.regenerate)
+    media_context = _build_turn_media_context(engine, result["response"])
+
+    return {
+        "response":    result["response"],
+        "sovereign":   result["sovereign"],
+        "violations":  result["violations"],
+        "turn":        result["turn"],
+        "engine_state": serialize_engine(engine),
+        "media_context": media_context,
     }
 
 
@@ -246,6 +344,7 @@ async def engine_step(
 
 async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_ENGINE_MODEL):
     """Streaming version — yields tokens, then a final metadata dict."""
+    await _reserve_turn_budget()
     init_client(settings.groq_api_key, engine_model)
     engine = deserialize_engine(engine_state)
 
@@ -317,10 +416,15 @@ async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_EN
     engine.history.append({'role': 'assistant', 'content': response})
     engine.display_history.append({'role': 'assistant', 'content': response})
 
-    extract_and_save_assumptions(response, engine.persona, engine.entities, lock=engine._lock)
+    # Synchronous calls (see engine/inference.py) run off the event loop via
+    # to_thread, but must be awaited here — the serialize_engine() a few lines
+    # down needs their mutations to have already landed, not be still in flight.
+    await asyncio.to_thread(
+        extract_and_save_assumptions, response, engine.persona, engine.entities, lock=engine._lock
+    )
     if len(engine.history) > MAX_RAW_TURNS:
         chunk = engine.history[:-MAX_RAW_TURNS]
-        summarize_async(chunk, engine.persona.name, engine.memory)
+        await asyncio.to_thread(summarize_chunk, chunk, engine.persona.name, engine.memory)
         engine.history = engine.history[-MAX_RAW_TURNS:]
         engine.metrics['compressions'] += 1
 
@@ -332,4 +436,5 @@ async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_EN
         "sovereign": sv['clean'],
         "violations": sv['violations'],
         "engine_state": serialize_engine(engine),
+        "media_context": _build_turn_media_context(engine, response),
     }

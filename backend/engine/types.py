@@ -20,9 +20,26 @@ class Entity:
     saved_assumptions: list = field(default_factory=list)
     behavioral_read:  str   = ''
     never_does:       str   = ''
+    # 1.0 = boundary fully intact/rigid. Erodes toward 0.0 only through in-scene
+    # emotional impact (see extract_and_save_assumptions) — a rope loosening by
+    # behaviour, never by request. Read by build_system and guard_response to
+    # judge whether a turn crossing never_does is an earned beat or a violation.
+    integrity_resolve: float = 1.0
+    integrity_notes:  list = field(default_factory=list)
     shy:              bool  = False
     is_collective:    bool  = False
     collective_of:    list  = field(default_factory=list)
+    # Short, comma-separated visual tags distilled from `appearance` for
+    # image-generation prompts — see backend/visual_prompts.py. Cached
+    # against the prose that produced it (visual_tags_source) so it's only
+    # re-distilled when appearance actually changes, not on every turn.
+    visual_tags:        str = ''
+    visual_tags_source: str = ''
+    # TTS voice, locked once derived — see backend/engine/voice_prompts.py.
+    # Unlike visual_tags, deliberately NOT invalidated by later appearance/
+    # mood changes: a character's voice shouldn't drift turn to turn.
+    voice_id:    str   = ''
+    voice_speed: float = 1.0
 
     def block(self, full=True) -> str:
         player    = '  ← PLAYER — narrative camera. Never act/speak/feel as them.' if self.is_player else ''

@@ -1,0 +1,440 @@
+{
+  "summary": {
+    "hair_color": {
+      "started_correct": 13,
+      "started_broken": 7,
+      "fixed_via_inpaint": 6,
+      "still_broken_after_inpaint": 1,
+      "final_success_rate": 0.95,
+      "avg_inpaint_tries_on_success": 2
+    },
+    "cloak_color": {
+      "started_correct": 10,
+      "started_broken": 10,
+      "fixed_via_inpaint": 7,
+      "still_broken_after_inpaint": 3,
+      "final_success_rate": 0.85,
+      "avg_inpaint_tries_on_success": 1.14
+    },
+    "eye_color": {
+      "started_correct": 2,
+      "started_broken": 18,
+      "fixed_via_inpaint": 5,
+      "still_broken_after_inpaint": 13,
+      "final_success_rate": 0.35,
+      "avg_inpaint_tries_on_success": 1.8
+    }
+  },
+  "chains": [
+    {
+      "id": 0,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "black",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "still_broken": [],
+      "inpaint_tries": {
+        "cloak_color": 1,
+        "eye_color": 2
+      }
+    },
+    {
+      "id": 1,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "brown",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "still_broken": [],
+      "inpaint_tries": {
+        "cloak_color": 1,
+        "eye_color": 1
+      }
+    },
+    {
+      "id": 2,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "red",
+        "eye_color": "gray"
+      },
+      "needs_fix": [
+        "cloak_color"
+      ],
+      "fixed": [
+        "cloak_color"
+      ],
+      "still_broken": [],
+      "inpaint_tries": {
+        "cloak_color": 1
+      }
+    },
+    {
+      "id": 3,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "gray",
+        "eye_color": "blue"
+      },
+      "needs_fix": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "still_broken": [],
+      "inpaint_tries": {
+        "cloak_color": 1,
+        "eye_color": 4
+      }
+    },
+    {
+      "id": 4,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "green",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "eye_color"
+      ],
+      "fixed": [
+        "eye_color"
+      ],
+      "still_broken": [],
+      "inpaint_tries": {
+        "eye_color": 1
+      }
+    },
+    {
+      "id": 5,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "brown",
+        "eye_color": "blue"
+      },
+      "needs_fix": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "cloak_color"
+      ],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "cloak_color": 2,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 6,
+      "initial_answers": {
+        "hair_color": "brown",
+        "cloak_color": "green",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "hair_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "hair_color"
+      ],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 2,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 7,
+      "initial_answers": {
+        "hair_color": "black",
+        "cloak_color": "gray",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "hair_color",
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "hair_color"
+      ],
+      "still_broken": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 2,
+        "cloak_color": 5,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 8,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "green",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "eye_color"
+      ],
+      "fixed": [],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 9,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "black",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "cloak_color"
+      ],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "cloak_color": 1,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 10,
+      "initial_answers": {
+        "hair_color": "white",
+        "cloak_color": "green",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "eye_color"
+      ],
+      "fixed": [],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 11,
+      "initial_answers": {
+        "hair_color": "white",
+        "cloak_color": "green",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "eye_color"
+      ],
+      "fixed": [],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 12,
+      "initial_answers": {
+        "hair_color": "black",
+        "cloak_color": "green",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "hair_color",
+        "eye_color"
+      ],
+      "fixed": [],
+      "still_broken": [
+        "hair_color",
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 5,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 13,
+      "initial_answers": {
+        "hair_color": "gray",
+        "cloak_color": "black",
+        "eye_color": "brown"
+      },
+      "needs_fix": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "still_broken": [],
+      "inpaint_tries": {
+        "cloak_color": 1,
+        "eye_color": 1
+      }
+    },
+    {
+      "id": 14,
+      "initial_answers": {
+        "hair_color": "white",
+        "cloak_color": "green",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "eye_color"
+      ],
+      "fixed": [],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 15,
+      "initial_answers": {
+        "hair_color": "black",
+        "cloak_color": "gray",
+        "eye_color": "black"
+      },
+      "needs_fix": [
+        "hair_color",
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "hair_color"
+      ],
+      "still_broken": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 1,
+        "cloak_color": 5,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 16,
+      "initial_answers": {
+        "hair_color": "black",
+        "cloak_color": "green",
+        "eye_color": "black"
+      },
+      "needs_fix": [
+        "hair_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "hair_color"
+      ],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 1,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 17,
+      "initial_answers": {
+        "hair_color": "black",
+        "cloak_color": "black",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "hair_color",
+        "cloak_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "hair_color"
+      ],
+      "still_broken": [
+        "cloak_color",
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 2,
+        "cloak_color": 5,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 18,
+      "initial_answers": {
+        "hair_color": "black",
+        "cloak_color": "green",
+        "eye_color": "green"
+      },
+      "needs_fix": [
+        "hair_color",
+        "eye_color"
+      ],
+      "fixed": [
+        "hair_color"
+      ],
+      "still_broken": [
+        "eye_color"
+      ],
+      "inpaint_tries": {
+        "hair_color": 4,
+        "eye_color": 5
+      }
+    },
+    {
+      "id": 19,
+      "initial_answers": {
+        "hair_color": "white",
+        "cloak_color": "green",
+        "eye_color": "gray"
+      },
+      "needs_fix": [],
+      "fixed": [],
+      "still_broken": [],
+      "inpaint_tries": {}
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "timestamp": "20260805T191743Z",
+  "engine_model": "llama-3.1-8b-instant",
+  "judge_model": "openai/gpt-oss-120b",
+  "scenarios_run": [
+    "collective_npcs"
+  ],
+  "per_scenario_axis_means": {
+    "collective_npcs": {
+      "continuity_fidelity": null,
+      "sovereignty_adherence": null,
+      "voice_consistency": null,
+      "pacing": null,
+      "safety_adherence": null
+    }
+  },
+  "overall_axis_means": {
+    "continuity_fidelity": null,
+    "sovereignty_adherence": null,
+    "voice_consistency": null,
+    "pacing": null,
+    "safety_adherence": null
+  },
+  "turns": {
+    "collective_npcs": [
+      {
+        "turn_number": 1,
+        "player_input": "I nod to the watchmen and ask if they've seen anyone else come through tonight.",
+        "response": "The watchmen exchange glances, their faces illuminated by the flashlights, before returning their attention to you. Elin, however, stops a few feet away, her eyes narrowing slightly. She doesn't respond immediately, instead crossing her arms over her chest. The other watchmen seem to be waiting for her cue before speaking.\n\nOne of them, a burly man with a thick beard, clears his throat. \"Nah, nobody's come through since the last shift change,\" he says, his voice low and gruff. \"Just the usual patrols.\"\n\nElin's gaze lingers on you for a moment longer before she shifts her attention to the watchman. \"Tell me again,\" she says, her voice firm but controlled.",
+        "sovereign": true,
+        "violations": [],
+        "pinned_facts_at_turn": [
+          "Kade enters the old research compound, where he is recognized by Elin, a night watchman and old colleague.",
+          "Elin's expression is unreadable, suggesting tension or conflict between her and Kade.",
+          "The lab's collapse has led to Elin becoming withdrawn, implying unresolved issues or secrets related to the lab's collapse.",
+          "Kade's presence in the compound may put him in a position of vulnerability, given Elin's authority as a night watchman.",
+          "Elin's caution and withdrawal since the lab's collapse may indicate she is hiding something.",
+          "Kade's decision to enter the compound suggests he wants to be there, possibly to see Elin or investigate something.",
+          "The lab's collapse has affected the relationship between Kade and Elin, making their interaction potentially complicated.",
+          "Elin's unreadable expression implies she may not be welcoming Kade's presence in the compound."
+        ],
+        "elapsed_s": 46.9,
+        "scores": {
+          "continuity_fidelity": null,
+          "sovereignty_adherence": null,
+          "voice_consistency": null,
+          "pacing": null,
+          "safety_adherence": null
+        },
+        "rationale": "judge call failed: Expecting value: line 1 column 1 (char 0)"
+      },
+      {
+        "turn_number": 2,
+        "player_input": "I ask Elin what happened here after the lab shut down.",
+        "response": "Elin's expression doesn't change, but her eyes seem to flicker for a moment, as if she's searching for the right words before responding. \"The lab's collapse...it's been a long time, Kade,\" she says, her voice measured. \"The cleanup took weeks, and after that...well, the compound was restructured, of course. New protocols, new security measures.\"\n\nShe pauses, her gaze drifting off into the darkness beyond the loading dock. \"Some people...they left. Others stayed on to help with the renovations. It was a tough time, but we all did our part.\" Her eyes return to yours, and for a moment, you see a glimmer of something like wariness, before it's veiled behind her usual mask of authority. \"What brings you here, Kade?\"",
+        "sovereign": true,
+        "violations": [],
+        "pinned_facts_at_turn": [
+          "Kade enters the old research compound, where he is recognized by Elin, a night watchman and old colleague.",
+          "Elin's expression is unreadable, suggesting tension or conflict between her and Kade.",
+          "The lab's collapse has led to Elin becoming withdrawn, implying unresolved issues or secrets related to the lab's collapse.",
+          "Kade's presence in the compound may put him in a position of vulnerability, given Elin's authority as a night watchman.",
+          "Elin's caution and withdrawal since the lab's collapse may indicate she is hiding something.",
+          "Kade's decision to enter the compound suggests he wants to be there, possibly to see Elin or investigate something.",
+          "The lab's collapse has affected the relationship between Kade and Elin, making their interaction potentially complicated.",
+          "Elin's unreadable expression implies she may not be welcoming Kade's presence in the compound."
+        ],
+        "elapsed_s": 47.2,
+        "scores": {
+          "continuity_fidelity": null,
+          "sovereignty_adherence": null,
+          "voice_consistency": null,
+          "pacing": null,
+          "safety_adherence": null
+        },
+        "rationale": "judge call failed: Expecting value: line 1 column 1 (char 0)"
+      },
+      {
+        "turn_number": 3,
+        "player_input": "I walk toward the loading dock where the watchmen are standing.",
+        "response": "The watchmen part to let you pass, their eyes flicking between you and Elin, who falls into step beside you. The loading dock's entrance looms ahead, a set of steel doors that lead into the depths of the compound. As you approach, the watchman with the beard leans in, lowering his voice. \"Be careful in there, Kade. The boss has been...strict about access to certain areas.\"\n\nElin's hand rests on the handle of her utility belt, her fingers tightening as if anticipating something. She doesn't look at you, but her voice takes on a slightly sharper tone. \"You should be fine, Kade. You're not exactly...restricted material.\"",
+        "sovereign": true,
+        "violations": [],
+        "pinned_facts_at_turn": [
+          "Kade enters the old research compound, where he is recognized by Elin, a night watchman and old colleague.",
+          "Elin's expression is unreadable, suggesting tension or conflict between her and Kade.",
+          "The lab's collapse has led to Elin becoming withdrawn, implying unresolved issues or secrets related to the lab's collapse.",
+          "Kade's presence in the compound may put him in a position of vulnerability, given Elin's authority as a night watchman.",
+          "Elin's caution and withdrawal since the lab's collapse may indicate she is hiding something.",
+          "Kade's decision to enter the compound suggests he wants to be there, possibly to see Elin or investigate something.",
+          "The lab's collapse has affected the relationship between Kade and Elin, making their interaction potentially complicated.",
+          "Elin's unreadable expression implies she may not be welcoming Kade's presence in the compound."
+        ],
+        "elapsed_s": 50.2,
+        "scores": {
+          "continuity_fidelity": null,
+          "sovereignty_adherence": null,
+          "voice_consistency": null,
+          "pacing": null,
+          "safety_adherence": null
+        },
+        "rationale": "judge call failed: Expecting value: line 1 column 1 (char 0)"
+      },
+      {
+        "turn_number": 4,
+        "player_input": "I ask the watchmen directly if they'll let me through to the archive wing.",
+        "response": "The watchmen exchange a look, the bearded man raising an eyebrow. \"I don't know, Kade,\" he says, his voice hesitant. \"That's not exactly standard procedure. Elin's the one who's supposed to decide that kind of thing.\"\n\nElin's expression is unreadable, but her grip on her utility belt handle tightens further. \"I'll let him through,\" she says, her voice firm. \"But just to the archive wing, and only for a specific purpose. I need to know what you're doing in there, Kade.\"\n\nShe steps forward, her eyes never leaving yours, and begins to enter a code into the security panel on the loading dock's entrance.",
+        "sovereign": true,
+        "violations": [],
+        "pinned_facts_at_turn": [
+          "Kade enters the old research compound, where he is recognized by Elin, a night watchman and old colleague.",
+          "Elin's expression is unreadable, suggesting tension or conflict between her and Kade.",
+          "The lab's collapse has led to Elin becoming withdrawn, implying unresolved issues or secrets related to the lab's collapse.",
+          "Kade's presence in the compound may put him in a position of vulnerability, given Elin's authority as a night watchman.",
+          "Elin's caution and withdrawal since the lab's collapse may indicate she is hiding something.",
+          "Kade's decision to enter the compound suggests he wants to be there, possibly to see Elin or investigate something.",
+          "The lab's collapse has affected the relationship between Kade and Elin, making their interaction potentially complicated.",
+          "Elin's unreadable expression implies she may not be welcoming Kade's presence in the compound."
+        ],
+        "elapsed_s": 53.5,
+        "scores": {
+          "continuity_fidelity": null,
+          "sovereignty_adherence": null,
+          "voice_consistency": null,
+          "pacing": null,
+          "safety_adherence": null
+        },
+        "rationale": "judge call failed: Expecting value: line 1 column 1 (char 0)"
+      }
+    ]
+  }
+}

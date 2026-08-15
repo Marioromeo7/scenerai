@@ -1,0 +1,30 @@
+{
+  "short": {
+    "field_set": "short",
+    "n": 1000,
+    "prompt": "long silver hair, loosely braided, pale grey eyes, dark green traveling cloak over leather armor, a thin scar across the left eyebrow, digital painting, portrait, single character, plain background",
+    "profile_text": "long silver hair, loosely braided, pale grey eyes, dark green traveling cloak over leather armor, a thin scar across the left eyebrow",
+    "steps": 20,
+    "generation_seconds": 7124.6,
+    "seconds_per_image": 7.12,
+    "image_similarity_to_canonical": {
+      "mean": 0.8525,
+      "stdev": 0.047,
+      "min": 0.4507,
+      "max": 0.9386
+    },
+    "caption_similarity_to_profile": {
+      "mean": 0.7199,
+      "stdev": 0.0515,
+      "min": 0.491,
+      "max": 0.8277
+    },
+    "sample_captions": [
+      "a man with long white hair and a helmet",
+      "the witch king by theartion",
+      "a man in a silver armor with a sword",
+      "a man with long hair and a beard",
+      "a man with long white hair and a beard"
+    ]
+  }
+}
