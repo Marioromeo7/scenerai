@@ -2,7 +2,7 @@
 import pytest
 import re
 from unittest.mock import patch, MagicMock
-from engine.call import call, init_client
+from engine.call import call
 
 
 def _fake_rate_error(message: str):

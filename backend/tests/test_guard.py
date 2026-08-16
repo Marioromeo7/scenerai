@@ -1,5 +1,4 @@
 """Tests for guard_response — the continuity + sovereignty repair chain."""
-import pytest
 from unittest.mock import patch
 from engine.inference import guard_response
 from engine.types import Entity, WorldState, Memory

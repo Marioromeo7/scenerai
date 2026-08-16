@@ -205,25 +205,6 @@ async def delete_persona(pid: str, db: AsyncSession = Depends(get_db), cu: User 
 
 # ── Scenarios ─────────────────────────────────────────────────
 
-# ── Image / Video Generation ────────────────────────────────
-# TODO: Integrate an AI image generation agent to produce scene card images.
-#      When a scenario is created, call an image generation model (e.g. Stable Diffusion,
-#      DALL-E, or Flux) using the scenario's title, brief, tags, and char_personality
-#      as the prompt. Store the resulting image URL or base64 in Scenario.image_url.
-#
-# TODO: Integrate a video generation agent for scenario trailers or key scene animations.
-#      Use models like Runway Gen-2, Pika, or Kling to generate short video clips
-#      from scene descriptions. Store in Scenario.video_url.
-#
-# Example agent interface:
-#   async def generate_scenario_image(char_name, title, brief, tags, personality) -> str:
-#       """Call image generation API, return image URL or base64."""
-#       ...
-#
-#   async def generate_scenario_video(description, duration=5) -> str:
-#       """Call video generation API, return video URL."""
-#       ...
-
 @app.post("/scenarios", response_model=ScenarioOut, status_code=201)
 @limiter.limit("10/minute")
 async def create_scenario(request: Request, body: ScenarioCreate, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):

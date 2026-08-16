@@ -154,12 +154,6 @@ class UserSubscriptionOut(BaseModel):
     class Config: from_attributes = True
 
 
-class PaginatedResponse(BaseModel):
-    items: list
-    next_cursor: Optional[str] = None
-    has_more: bool = False
-
-
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=128)

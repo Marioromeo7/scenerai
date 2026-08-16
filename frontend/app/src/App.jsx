@@ -3,11 +3,16 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { useAuth } from './AuthContext'
 
+// Errors stay loud in dev, silent in prod builds -- import.meta.env.DEV
+// is Vite's own flag (the process.env.NODE_ENV equivalent CRA/webpack
+// code uses doesn't exist in a Vite bundle).
+function logError(...args) { if (import.meta.env.DEV) console.error(...args) }
+
 // ── Error Boundary ────────────────────────────────────────────
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null } }
   static getDerivedStateFromError(error) { return { hasError: true, error } }
-  componentDidCatch(error, info) { console.error('ErrorBoundary:', error, info) }
+  componentDidCatch(error, info) { logError('ErrorBoundary:', error, info) }
   render() {
     if (this.state.hasError) {
       return (
@@ -259,7 +264,7 @@ function RatingStars({ sessionId, turn }) {
     try {
       await api.rateTurn(sessionId, turn, value)
     } catch (e) {
-      console.error(e)
+      logError(e)
       setRating(prev)
     } finally {
       setSaving(false)
@@ -574,7 +579,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     try {
       await api.regenerateTurnMedia(sessionId, turn)
     } catch (err) {
-      console.error(err)
+      logError(err)
       setTurnMedia(prev => ({ ...prev, [turn]: { ...prev[turn], status:'failed', error: err.message } }))
     } finally {
       setRegeneratingMediaTurn(null)
@@ -620,7 +625,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
       })
       .then(() => setEngineReady(true))
       .catch(err => {
-        console.error(err)
+        logError(err)
         setInitError(err.message)
       })
 
@@ -647,13 +652,13 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
           return next
         })
       } catch (err) {
-        console.error(err)
+        logError(err)
       }
       try {
         const movie = await api.getSessionMovie(sessionId)
         if (!cancelled) setMovieInfo(movie)
       } catch (err) {
-        console.error(err)
+        logError(err)
       }
     }
     poll()
@@ -955,7 +960,7 @@ function HistoryTab({ scenarios, onReopen }) {
       }
       setCursor(res.next_cursor)
       setHasMore(res.has_more)
-    } catch(e) { console.error(e) }
+    } catch(e) { logError(e) }
     finally { setLoading(false); setLoadingMore(false) }
   }
 
@@ -1034,7 +1039,7 @@ function BrowseTab({ scenarios, onPlay, savedIds, onSave, searchQuery, onReport 
       }
       setCursor(res.next_cursor)
       setHasMore(res.has_more)
-    } catch(e) { console.error(e) }
+    } catch(e) { logError(e) }
     finally { setLoading(false); setLoadingMore(false) }
   }
 
@@ -1108,6 +1113,17 @@ function App() {
   const [engineModel,   setEngineModel]   = useState(() => localStorage.getItem('scenarai_model')||'llama-3.1-8b-instant')
   const [contentFilter, setContentFilter] = useState(() => localStorage.getItem('scenarai_filter')||'off')
   const [searchQuery,   setSearchQuery]   = useState('')
+  // Dismissible error toast, replacing alert(err.message) across the
+  // persona/scenario/account forms below -- a blocking native alert()
+  // interrupts every action the same way regardless of severity; this
+  // shows the message without stopping the user from doing anything else.
+  const [errorToast,    setErrorToast]    = useState(null)
+  function showError(err) { setErrorToast(err?.message || String(err)) }
+  useEffect(() => {
+    if (!errorToast) return
+    const t = setTimeout(() => setErrorToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [errorToast])
 
   // Persona form state
   const [pName,setPName]=useState(''); const [pPronouns,setPPronouns]=useState('she/her'); const [pBrief,setPBrief]=useState('')
@@ -1225,7 +1241,7 @@ function App() {
       }
       setPName(''); setPBrief(''); setPPronouns('she/her')
       qc.invalidateQueries({ queryKey: ['personas'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
   }
 
   function startEditPersona(p) {
@@ -1242,7 +1258,7 @@ function App() {
       await api.deletePersona(id)
       if (activePersona?.id === id) setActivePersona(personas.find(p => p.id !== id) || null)
       qc.invalidateQueries({ queryKey: ['personas'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
   }
 
   async function generateScenario() {
@@ -1257,7 +1273,7 @@ function App() {
       setSCharName(''); setSTitle(''); setSPersonality(''); setSOpening('')
       setActiveTab('persona')
       qc.invalidateQueries({ queryKey: ['scenarios'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
     finally { setGenerating(false) }
   }
 
@@ -1265,7 +1281,7 @@ function App() {
     try {
       await api.publishScenario(id)
       qc.invalidateQueries({ queryKey: ['scenarios'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
   }
 
   async function unpublishScenario(id) {
@@ -1273,7 +1289,7 @@ function App() {
     try {
       await api.unpublishScenario(id)
       qc.invalidateQueries({ queryKey: ['scenarios'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
   }
 
   async function reportScenario(id) {
@@ -1282,7 +1298,7 @@ function App() {
     try {
       await api.reportScenario(id, reason.trim())
       alert('Report submitted. Thank you.')
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
   }
 
   function startEditScenario(s) {
@@ -1308,7 +1324,7 @@ function App() {
       setSCharName(''); setSTitle(''); setSPersonality(''); setSOpening('')
       setActiveTab('persona')
       qc.invalidateQueries({ queryKey: ['scenarios'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
     finally { setGenerating(false) }
   }
 
@@ -1318,14 +1334,14 @@ function App() {
       await api.deleteScenario(id)
       setExtraScenarios(prev => prev.filter(s => s.id !== id))
       qc.invalidateQueries({ queryKey: ['scenarios'] })
-    } catch(err) { alert(err.message) }
+    } catch(err) { showError(err) }
   }
 
   async function toggleSave(id, isSaved) {
     try {
       if (isSaved) { await api.unsaveScenario(id); setSavedIds(prev=>{const s=new Set(prev);s.delete(id);return s}) }
       else { await api.saveScenario(id); setSavedIds(prev=>new Set([...prev,id])) }
-    } catch(err) { console.error(err) }
+    } catch(err) { logError(err) }
   }
 
   function openPlay(sc) {
@@ -1355,6 +1371,20 @@ function App() {
 
   return (
     <div style={{display:'flex',height:'100vh',overflow:'hidden'}}>
+      {errorToast && (
+        <div style={{
+          position:'fixed',top:16,right:16,zIndex:1000,maxWidth:360,
+          background:'var(--bg-card)',border:'1px solid var(--danger)',borderRadius:10,
+          padding:'12px 14px',boxShadow:'0 4px 20px rgba(0,0,0,0.35)',
+          display:'flex',alignItems:'flex-start',gap:10,
+        }}>
+          <span style={{color:'var(--danger)',fontSize:13,flex:1,lineHeight:1.5}}>{errorToast}</span>
+          <button onClick={()=>setErrorToast(null)}
+            style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:16,padding:0,lineHeight:1}}>
+            ×
+          </button>
+        </div>
+      )}
       <aside className="sidebar">
         <div className="logo" onClick={()=>setPlayScenario(null)}>
           <div className="logo-word">Scen<em style={{fontStyle:'italic',color:'var(--accent)'}}>ar</em>ai</div>
@@ -1627,7 +1657,7 @@ function App() {
               onClick={async () => {
                 if (!confirm('Delete your account? This cannot be undone.')) return
                 if (!confirm('Are you sure? All scenarios and sessions will be lost.')) return
-                try { await api.deleteAccount(); logout() } catch(err) { alert(err.message) }
+                try { await api.deleteAccount(); logout() } catch(err) { showError(err) }
               }}>
               Delete account
             </button>
@@ -1689,7 +1719,7 @@ function App() {
                   setExtraScenarios(prev => [...prev, ...(res.items||[])])
                   setScenarioCursor(res.next_cursor)
                   setScenarioHasMore(res.has_more)
-                } catch(e) { console.error(e) }
+                } catch(e) { logError(e) }
               }}
             >
               Load more

@@ -1,5 +1,4 @@
 """Tests for engine dataclasses and state objects."""
-import pytest
 from engine.types import Entity, WorldState, Memory, ContentFilter, FilterState
 
 

@@ -7,7 +7,7 @@ Tests for the three hardening changes:
 import asyncio
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call as mock_call
+from unittest.mock import AsyncMock
 
 
 # ── Helpers ───────────────────────────────────────────────────
