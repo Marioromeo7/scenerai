@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import os
 
 from arq.connections import RedisSettings
 from sqlalchemy import select, update
@@ -150,10 +152,10 @@ async def generate_turn_media_job(
     media appears in TurnMedia once this finishes (status starts
     'pending', flips to 'ready' or 'failed').
 
-    Scoped down from the original "one continuously growing video" design
-    to one segment per turn for this first working version -- true
-    server-side live-concat is a real follow-up, not implemented here;
-    the frontend sequences per-turn segments as a playlist instead.
+    On success, also extends the session's cumulative movie.mp4 (see
+    _extend_session_movie) -- the frontend still plays per-turn segments
+    as a playlist in movie mode, but a single always-current file is also
+    kept for direct download/sharing.
     """
     async with AsyncSessionLocal() as db:
         existing = (await db.execute(
@@ -209,7 +211,6 @@ async def _run_media_pipeline(session_id: str, turn: int, image_prompt: str, nar
     """Shared by generate_turn_media_job and regenerate_turn_media_job --
     everything after the TurnMedia row is created/reset and a seed is
     decided is identical between a fresh generation and a reroll."""
-    import os
     import base64
     import httpx
 
@@ -252,6 +253,7 @@ async def _run_media_pipeline(session_id: str, turn: int, image_prompt: str, nar
             )
             await db.commit()
         logger.info(f"Turn media ready: session={session_id[:8]} turn={turn} seed={seed}")
+        await _extend_session_movie(session_id)
 
     except Exception as e:
         logger.error(f"Turn media failed: session={session_id[:8]} turn={turn}: {e}")
@@ -261,6 +263,135 @@ async def _run_media_pipeline(session_id: str, turn: int, image_prompt: str, nar
                 .values(status="failed", error=str(e)[:500])
             )
             await db.commit()
+
+
+MOVIE_LOCK_TTL = 30  # seconds -- generous vs. actual concat time (a few seconds)
+
+
+async def _extend_session_movie(session_id: str):
+    """Keeps {session_dir}/movie.mp4 as an always-current concatenation of
+    every ready turn's segment in order -- a single downloadable/shareable
+    file for "the whole story so far" without picking a turn range (see
+    main.py's /sessions/{id}/export, which this shares its ffmpeg approach
+    with for an explicit range).
+
+    Appends cheaply (concat [current movie.mp4, 1 new segment]) when new
+    turns extend the movie contiguously -- O(1) work per turn, not O(n).
+    Falls back to a full rebuild only when the desired turn list isn't a
+    simple extension of what's already baked in (a regenerate changed a
+    turn already included, or turns finished out of order under
+    concurrent arq jobs).
+
+    Guarded by a short Redis lock so two job completions for the same
+    session don't race on the same output file. Skip-on-contention (not
+    retry) is safe: whoever next acquires the lock re-scans DB state from
+    scratch, so a skipped update is only deferred, never lost -- the next
+    turn's completion (or a retry) converges the file to the same result.
+
+    Best-effort: errors here are logged, not raised -- a movie-build
+    problem must never flip an already-successful turn's media to
+    'failed'.
+    """
+    try:
+        redis = await get_redis()
+        lock_key = f"movie_lock:{session_id}"
+        got_lock = await redis.set(lock_key, "1", nx=True, ex=MOVIE_LOCK_TTL)
+        if not got_lock:
+            return
+        try:
+            async with AsyncSessionLocal() as db:
+                rows = (await db.execute(
+                    select(TurnMedia.turn).where(
+                        TurnMedia.session_id == session_id, TurnMedia.status == "ready",
+                        TurnMedia.video_segment_url.isnot(None),
+                    ).order_by(TurnMedia.turn)
+                )).scalars().all()
+            if not rows:
+                return
+
+            # Longest contiguous run starting at the first ready turn --
+            # a gap (a still-pending or failed turn in the middle) means
+            # the movie can't safely extend past it yet.
+            contiguous = [rows[0]]
+            for t in rows[1:]:
+                if t == contiguous[-1] + 1:
+                    contiguous.append(t)
+                else:
+                    break
+
+            session_dir = f"{MEDIA_ROOT}/{session_id}"
+            state_path  = f"{session_dir}/movie_state.json"
+            movie_path  = f"{session_dir}/movie.mp4"
+
+            try:
+                with open(state_path) as f:
+                    current = json.load(f).get("turns", [])
+            except (FileNotFoundError, json.JSONDecodeError):
+                current = []
+
+            if current == contiguous:
+                return  # already up to date
+
+            is_extension = bool(current) and contiguous[:len(current)] == current
+            if is_extension:
+                for t in contiguous[len(current):]:
+                    await _concat_videos([movie_path, f"{session_dir}/{t}.mp4"], movie_path)
+            else:
+                await _concat_videos([f"{session_dir}/{t}.mp4" for t in contiguous], movie_path)
+
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"turns": contiguous}, f)
+            logger.info(f"Session movie extended: session={session_id[:8]} turns=1..{contiguous[-1]}")
+        finally:
+            await redis.delete(lock_key)
+    except Exception as e:
+        logger.error(f"Session movie extend failed for {session_id[:8]}: {e}")
+
+
+async def _concat_videos(input_paths: list[str], output_path: str):
+    """Shared ffmpeg concat-demuxer helper. Re-encodes rather than stream-
+    copies -- confirmed live (see /sessions/{id}/export in main.py) that
+    stream-copy across independently-stitched segments produces
+    "Non-monotonic DTS" warnings at the splice point; re-encoding (fast
+    preset, short clips) avoids that for a small time cost.
+
+    Always writes to a temp file and atomically replaces output_path --
+    required (not just nice-to-have) when output_path is also one of the
+    inputs, as it is for the append case: ffmpeg can't safely read and
+    write the same file at once, and a crash mid-encode must never leave
+    a truncated movie.mp4 visible to something already serving it."""
+    import tempfile
+
+    session_dir = os.path.dirname(output_path)
+    fd, filelist_path = tempfile.mkstemp(suffix=".txt", dir=session_dir)
+    os.close(fd)
+    tmp_output = f"{output_path}.tmp"
+    try:
+        with open(filelist_path, "w", encoding="utf-8") as f:
+            for p in input_paths:
+                f.write(f"file '{p}'\n")
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", filelist_path,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-movflags", "+faststart",
+            # Explicit output format -- tmp_output's extension is ".tmp",
+            # not ".mp4" (it's renamed after success), so ffmpeg can't
+            # infer the muxer from the filename the way it can for
+            # /export's tmp-free output path. Found live: without this,
+            # ffmpeg fails with "Unable to choose an output format".
+            "-f", "mp4", tmp_output,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg concat failed: {stderr.decode(errors='replace')[-500:]}")
+        os.replace(tmp_output, output_path)
+    finally:
+        if os.path.exists(filelist_path):
+            os.remove(filelist_path)
+        if os.path.exists(tmp_output):
+            os.remove(tmp_output)
 
 
 class WorkerSettings:

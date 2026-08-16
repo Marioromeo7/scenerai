@@ -35,7 +35,7 @@ from schemas import (
     ScenarioCreate, ScenarioOut, ScenarioUpdate,
     SessionCreate, SessionOut,
     PlayTurnWithModel, ContinueTurnRequest, RegenerateRequest, PlayResponse,
-    TurnRatingCreate, TurnRatingOut, TurnMediaOut, ExportRequest, ExportOut,
+    TurnRatingCreate, TurnRatingOut, TurnMediaOut, ExportRequest, ExportOut, SessionMovieOut,
     SessionLogOut,
     PasswordChange, ScenarioReport,
     SubscriptionTierOut, UserSubscriptionOut, TelemetryOut,
@@ -728,6 +728,23 @@ async def regenerate_turn_media(session_id: str, turn: int, request: Request,
 
 
 EXPORT_MEDIA_ROOT = "/app/media"  # matches this service's docker-compose volume mount
+
+
+@app.get("/sessions/{session_id}/movie", response_model=SessionMovieOut)
+async def get_session_movie(session_id: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+    """The always-current, whole-session-so-far file kept up to date by
+    worker._extend_session_movie -- a plain filesystem check (not a DB
+    flag) since that function is the single source of truth for whether
+    movie.mp4 reflects the latest ready turns."""
+    owned = (await db.execute(
+        select(TurnMedia.id).where(TurnMedia.session_id == session_id, TurnMedia.user_id == cu.id).limit(1)
+    )).scalar_one_or_none()
+    if not owned:
+        raise HTTPException(404, "Session not found")
+    path = f"{EXPORT_MEDIA_ROOT}/{session_id}/movie.mp4"
+    if not os.path.exists(path):
+        return SessionMovieOut(available=False, url=None)
+    return SessionMovieOut(available=True, url=f"/media/{session_id}/movie.mp4")
 
 
 @app.post("/sessions/{session_id}/export", response_model=ExportOut)

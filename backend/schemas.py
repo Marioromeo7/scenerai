@@ -116,6 +116,10 @@ class ExportOut(BaseModel):
     download_url: str
     turns: List[int]
 
+class SessionMovieOut(BaseModel):
+    available: bool
+    url: Optional[str] = None
+
 class TurnMediaOut(BaseModel):
     turn: int; status: str
     image_url: Optional[str]; audio_url: Optional[str]; video_segment_url: Optional[str]

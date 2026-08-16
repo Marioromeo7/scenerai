@@ -412,7 +412,7 @@ function Bubble({ msg, charName, charInit, personaName, personaInit, sessionId, 
 // (see worker.py's generate_turn_media_job docstring); this plays the same
 // per-turn segments back-to-back client-side instead, auto-advancing as
 // each one ends.
-function MoviePlayer({ turnMedia, messages, muted, charName, sessionId }) {
+function MoviePlayer({ turnMedia, messages, muted, charName, sessionId, movieInfo }) {
   const ready = Object.values(turnMedia)
     .filter(m => m.status === 'ready' && m.video_segment_url)
     .sort((a, b) => a.turn - b.turn)
@@ -498,6 +498,16 @@ function MoviePlayer({ turnMedia, messages, muted, charName, sessionId }) {
         </button>
       </div>
 
+      {/* Always-current whole-session file, kept up to date server-side as
+          each turn's media completes (worker._extend_session_movie) --
+          separate from the ad-hoc turn-range export below. */}
+      {movieInfo?.available && (
+        <a href={movieInfo.url} download
+          style={{fontSize:12,color:'var(--accent)',textDecoration:'underline'}}>
+          ⬇ Download full movie so far ({ready.length} scene{ready.length===1?'':'s'})
+        </a>
+      )}
+
       {/* Export: pick a turn range from the ready scenes and combine them
           into one downloadable mp4 (backend concatenates via ffmpeg). */}
       <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'var(--text-secondary)'}}>
@@ -542,6 +552,9 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   // a background arq job and isn't ready by the time the turn's text is.
   const [turnMedia,setTurnMedia]       = useState({})
   const [regeneratingMediaTurn,setRegeneratingMediaTurn] = useState(null)
+  // Always-current whole-session movie file (see worker._extend_session_movie) --
+  // separate from per-turn turnMedia, polled alongside it.
+  const [movieInfo,setMovieInfo]       = useState({ available:false, url:null })
   const [muted,setMuted]               = useState(() => localStorage.getItem('scenarai_muted') === '1')
   const [movieMode,setMovieMode]       = useState(false)
   const bodyRef  = useRef()
@@ -633,6 +646,12 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
           for (const row of rows) next[row.turn] = row
           return next
         })
+      } catch (err) {
+        console.error(err)
+      }
+      try {
+        const movie = await api.getSessionMovie(sessionId)
+        if (!cancelled) setMovieInfo(movie)
       } catch (err) {
         console.error(err)
       }
@@ -822,7 +841,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
           <InitializingScreen charName={charName}/>
         </div>
       ) : movieMode ? (
-        <MoviePlayer turnMedia={turnMedia} messages={messages} muted={muted} charName={charName} sessionId={sessionId}/>
+        <MoviePlayer turnMedia={turnMedia} messages={messages} muted={muted} charName={charName} sessionId={sessionId} movieInfo={movieInfo}/>
       ) : (
         <>
           <div ref={bodyRef} className="chat-body" style={{flex:1,overflowY:'auto',padding:'24px 32px',maxWidth:780,margin:'0 auto',width:'100%'}}>

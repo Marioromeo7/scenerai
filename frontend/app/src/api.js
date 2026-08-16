@@ -132,6 +132,8 @@ export const api = {
                      request('POST',  `/sessions/${session_id}/turns/${turn}/regenerate-media`),
   exportSessionVideo: (session_id, from_turn, to_turn) =>
                      request('POST',  `/sessions/${session_id}/export`, { from_turn, to_turn }),
+  getSessionMovie:   (session_id) =>
+                     request('GET',   `/sessions/${session_id}/movie`),
   // Billing is mock-only until a real payment processor exists — see
   // backend/models.py's UserSubscription docstring. These 404 unless the
   // backend's MOCK_BILLING_ENABLED flag is on.
