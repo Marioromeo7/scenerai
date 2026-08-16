@@ -73,6 +73,11 @@ logs/
 # Local-only compose overrides (e.g. port remaps to dodge conflicts with other projects)
 docker-compose.override.yml
 
+# Real cloudflared tunnel config -- machine-specific (Tunnel ID, local
+# credentials-file path, your own domain). Only config.yml.example is
+# tracked as a template; see docs/CLOUDFLARE_TUNNEL_SETUP.md.
+cloudflare/config.yml
+
 # Load test output
 loadtest/thresholds.json
 loadtest/report.json

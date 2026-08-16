@@ -1,0 +1,17 @@
+# cloudflared named-tunnel config -- copy to config.yml and fill in the
+# two placeholders once the tunnel exists (see docs/CLOUDFLARE_TUNNEL_SETUP.md).
+# Unlike the current `cloudflared tunnel --url http://localhost:80` quick
+# tunnel (a fresh trycloudflare.com hostname every restart), a named
+# tunnel keeps the same public hostname across restarts and reboots.
+
+tunnel: <TUNNEL_ID>
+credentials-file: C:\Users\mario\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  # Everything goes to nginx, exactly like the quick tunnel does today --
+  # nginx is still what routes / to frontend, /api to backend, /media to
+  # static files. This tunnel just replaces "how traffic reaches nginx",
+  # not nginx's own routing.
+  - hostname: <YOUR_SUBDOMAIN>.<YOUR_DOMAIN>
+    service: http://localhost:80
+  - service: http_status:404
