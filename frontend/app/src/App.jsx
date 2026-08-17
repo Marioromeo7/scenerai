@@ -564,6 +564,15 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   const [movieMode,setMovieMode]       = useState(false)
   const bodyRef  = useRef()
   const inputRef = useRef()
+  // Synchronous re-entry guard for send() -- `loading` is React state and
+  // isn't updated until the next render, so a double-click/double-Enter
+  // before that render commits would otherwise pass the `loading` check
+  // twice and race on the same assistantIdx. Refs update immediately.
+  const sendingRef = useRef(false)
+  // Tracks the in-flight stream's AbortController so navigating away
+  // mid-response can cancel it instead of leaving an orphaned reader loop
+  // running against an unmounted view.
+  const streamAbortRef = useRef(null)
 
   function toggleMuted() {
     setMuted(m => {
@@ -629,7 +638,10 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
         setInitError(err.message)
       })
 
-    return () => { if (sid) api.endSession(sid).catch(() => {}) }
+    return () => {
+      streamAbortRef.current?.abort()
+      if (sid) api.endSession(sid).catch(() => {})
+    }
   }, [scenario?.id, persona?.id])
 
   useEffect(() => {
@@ -668,6 +680,8 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
 
   async function send() {
     if (!input.trim() || !sessionId || loading || regenerating || !engineReady) return
+    if (sendingRef.current) return
+    sendingRef.current = true
     const text = input.trim()
     setInput('')
     // Add user message immediately
@@ -677,8 +691,11 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     const assistantIdx = messages.length + 1
     setMessages(m => [...m, { role:'assistant', content:'', sovereign:true, violations:[], streaming:true }])
 
+    const controller = new AbortController()
+    streamAbortRef.current = controller
+
     try {
-      const response = await api.playTurnStream(sessionId, text, engineModel)
+      const response = await api.playTurnStream(sessionId, text, engineModel, controller.signal)
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -692,44 +709,57 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
         buffer = lines.pop() || ''
         for (const line of lines) {
           if (line.startsWith('data: ')) {
+            // Parse failures here are a genuinely-incomplete SSE chunk (the
+            // rest arrives in a later read()) -- skip just this line, don't
+            // treat it as fatal. Narrowly scoped so it can never also catch
+            // (and silently swallow) the intentional throw below for a real
+            // backend error, whatever that error's message text happens to be.
+            let data
             try {
-              const data = JSON.parse(line.slice(6))
-              if (data.type === 'token') {
-                fullContent += data.content
-                // Update the streaming message
-                setMessages(prev => {
-                  const updated = [...prev]
-                  updated[assistantIdx] = { ...updated[assistantIdx], content: fullContent }
-                  return updated
-                })
-              } else if (data.type === 'done') {
-                // Finalize the message
-                setMessages(prev => {
-                  const updated = [...prev]
-                  updated[assistantIdx] = {
-                    role: 'assistant',
-                    content: data.response,
-                    sovereign: data.sovereign,
-                    violations: data.violations,
-                    turn: data.turn,
-                    streaming: false,
-                  }
-                  return updated
-                })
-              } else if (data.type === 'error') {
-                throw new Error(data.message)
-              }
-            } catch (e) {
-              if (e.message && !e.message.includes('JSON')) throw e
+              data = JSON.parse(line.slice(6))
+            } catch {
+              continue
+            }
+            if (data.type === 'token') {
+              fullContent += data.content
+              // Update the streaming message
+              setMessages(prev => {
+                const updated = [...prev]
+                updated[assistantIdx] = { ...updated[assistantIdx], content: fullContent }
+                return updated
+              })
+            } else if (data.type === 'done') {
+              // Finalize the message
+              setMessages(prev => {
+                const updated = [...prev]
+                updated[assistantIdx] = {
+                  role: 'assistant',
+                  content: data.response,
+                  sovereign: data.sovereign,
+                  violations: data.violations,
+                  turn: data.turn,
+                  streaming: false,
+                }
+                return updated
+              })
+            } else if (data.type === 'error') {
+              throw new Error(data.message)
             }
           }
         }
       }
     } catch (err) {
-      setMessages(m => [...m, { role:'error', content:err.message }])
-      // Remove the streaming placeholder if error
-      setMessages(prev => prev.filter((_, i) => i !== assistantIdx))
+      // AbortError means the view is being torn down (see the unmount
+      // cleanup below) -- the user already navigated away, so there's no
+      // bubble left to show an error in and nothing to clean up either.
+      if (err.name !== 'AbortError') {
+        setMessages(m => [...m, { role:'error', content:err.message }])
+        // Remove the streaming placeholder if error
+        setMessages(prev => prev.filter((_, i) => i !== assistantIdx))
+      }
     } finally {
+      sendingRef.current = false
+      streamAbortRef.current = null
       setLoading(false)
       inputRef.current?.focus()
     }
@@ -1021,7 +1051,7 @@ function HistoryTab({ scenarios, onReopen }) {
 }
 
 // ── Browse tab (public scenarios) ─────────────────────────────
-function BrowseTab({ scenarios, onPlay, savedIds, onSave, searchQuery, onReport }) {
+function BrowseTab({ scenarios, onPlay, savedIds, onSave, searchQuery, onReport, onUnpublish }) {
   const [items,setItems]           = useState([])
   const [cursor,setCursor]         = useState(null)
   const [hasMore,setHasMore]       = useState(false)
@@ -1083,6 +1113,7 @@ function BrowseTab({ scenarios, onPlay, savedIds, onSave, searchQuery, onReport 
             isOwner={ownIds.has(s.id)}
             onEdit={()=>{}}
             onDelete={()=>{}}
+            onUnpublish={onUnpublish}
             onReport={!ownIds.has(s.id) ? onReport : undefined}
           />
         ))}
@@ -1110,7 +1141,7 @@ function App() {
   const [playPreview,   setPlayPreview]   = useState(false)
   const [filter,        setFilter]        = useState('all')
   const [generating,    setGenerating]    = useState(false)
-  const [engineModel,   setEngineModel]   = useState(() => localStorage.getItem('scenarai_model')||'llama-3.1-8b-instant')
+  const [engineModel,   setEngineModel]   = useState(() => localStorage.getItem('scenarai_model')||'openai/gpt-oss-20b')
   const [contentFilter, setContentFilter] = useState(() => localStorage.getItem('scenarai_filter')||'off')
   const [searchQuery,   setSearchQuery]   = useState('')
   // Dismissible error toast, replacing alert(err.message) across the
@@ -1161,6 +1192,18 @@ function App() {
     enabled: !!user,
     staleTime: Infinity,
   })
+  // Falls forward to a real model once the list loads if the current
+  // engineModel isn't in it -- catches both the hardcoded initial default
+  // and, more importantly, a model ID a returning user already has cached
+  // in localStorage from before a backend model was retired (Groq
+  // decommissioned this app's entire previous model roster in one go;
+  // nothing but this check would ever notice a stale cached choice).
+  useEffect(() => {
+    if (modelOptions.length === 0) return
+    if (!modelOptions.some(m => m.id === engineModel)) {
+      changeModel(modelOptions[0].id)
+    }
+  }, [modelOptions])
   // Mock billing (see backend/models.py's UserSubscription docstring) --
   // 404s until MOCK_BILLING_ENABLED is on, so retry:false + the ?? []
   // fallback below mean the tab just renders empty rather than erroring
@@ -1208,12 +1251,30 @@ function App() {
     if (personas.length > 0 && !activePersona) setActivePersona(personas[0])
   }, [personas])
 
-  // Sync cursor/hasMore from query result
+  // Sync cursor/hasMore from query result -- but only while still on page 1
+  // (extraScenarios empty). scenarioPage refetches in the background every
+  // 15s while any scenario has prefab_ready===false (see the ['scenarios']
+  // query above), and that refetch is always page 1; without this guard,
+  // a refetch firing after the user has clicked "Load more" would silently
+  // reset scenarioCursor/scenarioHasMore back to page 1's values, and the
+  // next "Load more" click would re-fetch and re-append page 2, producing
+  // duplicate cards with duplicate React keys.
   useEffect(() => {
-    if (!scenarioPage) return
+    if (!scenarioPage || extraScenarios.length > 0) return
     setScenarioCursor(scenarioPage.next_cursor || null)
     setScenarioHasMore(scenarioPage.has_more || false)
-  }, [scenarioPage])
+  }, [scenarioPage, extraScenarios.length])
+
+  // Hydrate savedIds from the backend on load -- without this, every fresh
+  // page load shows every scenario as unsaved even though ScenarioSave rows
+  // are still there, since savedIds otherwise only gets written to by
+  // toggleSave() during the current session.
+  useEffect(() => {
+    if (!user) return
+    api.getSavedScenarioIds()
+      .then(({ ids }) => setSavedIds(new Set(ids)))
+      .catch(logError)
+  }, [user])
 
   if (authLoading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'var(--text-muted)'}}>Loading…</div>
   if (!user) return <AuthGate/>
@@ -1473,6 +1534,7 @@ function App() {
             onSave={toggleSave}
             searchQuery={searchQuery}
             onReport={reportScenario}
+            onUnpublish={unpublishScenario}
           />
         </div>
 
@@ -1591,11 +1653,9 @@ function App() {
               {modelOptions.length>0
                 ?modelOptions.map(m=><option key={m.id} value={m.id}>{m.label}</option>)
                 :<>
-                  <option value="llama-3.1-8b-instant">LLaMA 3.1 8B — fastest</option>
-                  <option value="llama-3.3-70b-versatile">LLaMA 3.3 70B — best quality</option>
-                  <option value="llama-3.1-70b-versatile">LLaMA 3.1 70B — balanced</option>
-                  <option value="gemma2-9b-it">Gemma 2 9B — Google</option>
-                  <option value="mixtral-8x7b-32768">Mixtral 8x7B — large context</option>
+                  <option value="openai/gpt-oss-20b">GPT-OSS 20B — fastest</option>
+                  <option value="openai/gpt-oss-120b">GPT-OSS 120B — best quality</option>
+                  <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — balanced</option>
                 </>
               }
             </select>

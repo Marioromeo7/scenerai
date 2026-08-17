@@ -8,6 +8,10 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    api.onSessionExpired(() => setUser(null))
+  }, [])
+
+  useEffect(() => {
     const token = localStorage.getItem('scenarai_token')
     if (token) {
       // api.me() transparently refreshes on a stale access token (see

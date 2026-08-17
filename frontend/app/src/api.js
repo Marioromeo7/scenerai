@@ -29,6 +29,13 @@ function authHeaders() {
 // concurrent 401s onto one shared refresh avoids that self-inflicted race.
 let _refreshInFlight = null
 
+// AuthContext registers a listener here so a refresh failure that happens
+// deep inside some arbitrary API call (not just the initial-load check in
+// AuthContext's own effect) still flips the app back to logged-out state,
+// instead of leaving `user` populated while every request now 401s forever.
+let _onSessionExpired = null
+export function onSessionExpired(callback) { _onSessionExpired = callback }
+
 async function _doRefresh() {
   const refreshToken = getRefreshToken()
   if (!refreshToken) throw new Error('No refresh token')
@@ -39,6 +46,7 @@ async function _doRefresh() {
   })
   if (!res.ok) {
     clearTokens()
+    if (_onSessionExpired) _onSessionExpired()
     throw new Error('Session expired — please log in again')
   }
   const data = await res.json()
@@ -53,16 +61,29 @@ function refreshTokens() {
   return _refreshInFlight
 }
 
-async function request(method, path, body, _isRetry = false) {
+// Shared by request() and playTurnStream() -- the latter needs the raw
+// Response (for its reader), not a parsed body, but must go through the
+// exact same 401-refresh-and-retry path or a mid-stream token expiry is
+// treated as a hard failure instead of the invisible refresh every other
+// call gets.
+async function _fetchWithAuth(path, options, _isRetry = false) {
   const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: body ? JSON.stringify(body) : undefined,
+    ...options,
+    headers: { ...options.headers, ...authHeaders() },
   })
   if (res.status === 401 && !_isRetry && getRefreshToken()) {
     await refreshTokens()
-    return request(method, path, body, true)
+    return _fetchWithAuth(path, options, true)
   }
+  return res
+}
+
+async function request(method, path, body) {
+  const res = await _fetchWithAuth(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Request failed')
@@ -101,6 +122,7 @@ export const api = {
 
   // Scenarios
   createScenario: (data) => request('POST', '/scenarios', data),
+  getSavedScenarioIds: () => request('GET', '/scenarios/saved-ids'),
   listScenarios: (cursor, limit = 20) => request('GET', `/scenarios?limit=${limit}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`),
   listPublicScenarios: (cursor, limit = 20) => request('GET', `/scenarios/public?limit=${limit}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`),
   getScenario:    (id)   => request('GET',    `/scenarios/${id}`),
@@ -141,17 +163,24 @@ export const api = {
   getMySubscription: () => request('GET',  '/billing/subscription'),
   mockSubscribe:     (tier_id) => request('POST', `/billing/subscribe/${tier_id}`),
   getTelemetry:      () => request('GET', '/admin/telemetry'),
-  playTurnStream:    (session_id, input, engine_model) => {
-    // Returns a Response for SSE streaming
-    const token = getToken()
-    return fetch(`${BASE}/sessions/${session_id}/turn-stream`, {
+  playTurnStream:    async (session_id, input, engine_model, signal) => {
+    // Returns a Response for SSE streaming -- routes through the same
+    // 401-refresh-retry and real-error-detail handling as request(),
+    // just without parsing the body as JSON (the caller reads it as a stream).
+    // signal: optional AbortSignal so the caller can cancel an in-flight
+    // stream (e.g. navigating away mid-response) instead of it running
+    // to completion against an orphaned UI.
+    const res = await _fetchWithAuth(`/sessions/${session_id}/turn-stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input, engine_model }),
-    }).then(res => {
-      if (!res.ok) throw new Error('Stream request failed')
-      return res
+      signal,
     })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || 'Stream request failed')
+    }
+    return res
   },
   endSession:        (session_id) =>
                      request('DELETE', `/sessions/${session_id}`),
