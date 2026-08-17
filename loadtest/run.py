@@ -61,6 +61,21 @@ async def run_baseline(base_url, n):
     for r in results:
         for step, ms in r.latencies_ms.items():
             per_step.setdefault(step, []).append(ms)
+            # scenarai_client._timed's own docstring: player_flow's turn_1/
+            # turn_2/... share threshold_key="turn" at lookup time (so one
+            # threshold covers every turn regardless of its position),
+            # distinct from their own step name so latencies_ms keeps the
+            # granular per-turn breakdown. Found via code review that this
+            # baseline never actually wrote that "turn" key -- only the
+            # per-turn ones -- so thresholds.get("turn") was always None at
+            # runtime and latency_breach detection silently never fired for
+            # turns, the metric the whole harness exists to measure. Folding
+            # turn_N samples into "turn" here (creator_flow's own single
+            # turn step is already named "turn" and needs no folding) fixes
+            # the key the runtime lookup actually uses without losing the
+            # printed per-turn breakdown below.
+            if step.startswith("turn_") and step[5:].isdigit():
+                per_step.setdefault("turn", []).append(ms)
 
     recommended = {}
     print("\n[baseline] per-step latency (ms):")
@@ -163,12 +178,21 @@ def main():
         asyncio.run(run_baseline(args.base_url, args.n))
         return
 
+    # Merge onto the generous defaults rather than replacing them outright --
+    # found via code review: a thresholds.json that's missing a step (the
+    # committed one has no entry for end_session, create_scenario, publish,
+    # prefab_status_poll, create_preview_session, or get_history) used to
+    # silently disable latency_breach detection for that step entirely,
+    # not fall back to the documented "generous placeholder" the
+    # FileNotFoundError branch below promises -- that fallback only ever
+    # triggered when the file was missing outright, never when it was just
+    # incomplete.
+    thresholds = _default_thresholds()
     try:
         with open(args.thresholds) as f:
-            thresholds = json.load(f)
+            thresholds.update(json.load(f))
     except FileNotFoundError:
         print(f"[ramp] {args.thresholds} not found — run `baseline` first. Using generous placeholder thresholds.")
-        thresholds = _default_thresholds()
 
     all_results, tier_reports = asyncio.run(
         run_ramp(args.base_url, args.start, args.step, args.max_concurrency, args.step_duration, thresholds)

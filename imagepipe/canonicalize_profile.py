@@ -24,7 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from groq import Groq
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "openai/gpt-oss-20b"  # llama-3.1-8b-instant was decommissioned by Groq
 
 SYSTEM_PROMPT = """You simplify visual-description phrases for a Stable Diffusion 1.5 image prompt so the model renders them more reliably. You make the MINIMUM edit needed -- most phrases need zero changes.
 

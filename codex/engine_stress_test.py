@@ -8,7 +8,7 @@ write scenarios, sessions, or users to the database.
 Usage from repo root:
   python codex/engine_stress_test.py --max-turns 18
 
-If GROQ_API_KEY is not in the environment, the script also reads backend.env
+If GROQ_API_KEY is not in the environment, the script also reads .env
 without printing any secret values.
 """
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import re
 import sys
 import time
@@ -29,29 +28,15 @@ BACKEND = ROOT / "backend"
 if not BACKEND.exists() and (ROOT / "main.py").exists():
     BACKEND = ROOT
 sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _env import load_env_file  # noqa: E402
 
-def load_env_file(path: Path) -> None:
-    if not path.exists():
-        return
-    raw_bytes = path.read_bytes()
-    if b"\x00" in raw_bytes:
-        text = raw_bytes.decode("utf-16", errors="ignore")
-    else:
-        text = raw_bytes.decode("utf-8", errors="replace")
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if "\x00" in key or "\x00" in value:
-            continue
-        os.environ.setdefault(key, value)
-
-
-load_env_file(ROOT / "backend.env")
+# .env, not backend.env -- generated/legacy per .claude/CLAUDE.md's "Do Not
+# Touch" list, not the real config source. Found live via code review: a
+# stale backend.env could silently diverge from the real .env this script
+# actually needs to test against.
+load_env_file(ROOT / ".env")
 
 from ai_service import DEFAULT_ENGINE_MODEL, engine_step  # noqa: E402
 from config import settings  # noqa: E402

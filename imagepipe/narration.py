@@ -35,8 +35,8 @@ def load_narrator():
     if not models_available():
         raise RuntimeError(
             f"Kokoro model files not found in {_MODEL_DIR} — download "
-            f"kokoro-v0_19.onnx and voices.bin from the kokoro-onnx GitHub "
-            f"releases first."
+            f"kokoro-v1.0.onnx and voices-v1.0.bin from the kokoro-onnx "
+            f"GitHub releases first."
         )
     return Kokoro(_MODEL_PATH, _VOICES_PATH)
 

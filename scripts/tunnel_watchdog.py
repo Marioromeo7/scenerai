@@ -36,6 +36,20 @@ LAUNCH_LOG     = Path(r"D:\scenarai_project\cloudflare_tunnel_watchdog.log")
 HEALTH_PATH    = "/api/health"
 URL_RE         = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 LAUNCH_TIMEOUT_S = 30
+# Separate from LAUNCH_TIMEOUT_S -- cloudflared can print the assigned URL
+# in its log before Cloudflare's edge has actually finished propagating the
+# route, or before the local backend is reachable through it yet. Found via
+# code review: publishing on log-output alone (no health check) risked
+# pushing a redirect to a URL that isn't actually serving traffic.
+#
+# 60s, not a smaller guess -- measured live: a fresh Quick Tunnel hostname
+# took over a minute to become DNS-resolvable even via 1.1.1.1 directly
+# (ruling out local resolver caching), confirmed by watching two real
+# restarts (one manual, one via the actual Scheduled Task) both correctly
+# decline to publish at a 20s cutoff. Waiting longer here, still well
+# inside the Scheduled Task's 5-minute execution limit, resolves within
+# the same run far more often than deferring to the next 10-minute cycle.
+PUBLISH_HEALTH_TIMEOUT_S = 60
 
 
 def _current_url() -> str | None:
@@ -131,7 +145,23 @@ def main():
               f"Check {LAUNCH_LOG} manually.")
         raise SystemExit(1)
 
-    print(f"New tunnel URL: {new_url}")
+    print(f"New tunnel URL: {new_url} -- verifying it's actually serving traffic before publishing.")
+    deadline = time.time() + PUBLISH_HEALTH_TIMEOUT_S
+    healthy = False
+    while time.time() < deadline:
+        if _is_healthy(new_url):
+            healthy = True
+            break
+        time.sleep(2)
+    if not healthy:
+        # Deliberately don't touch the gh-pages redirect here -- it's better
+        # left pointing at the old (confirmed-dead) URL than to be updated
+        # to a new URL that was never confirmed to work either. The next
+        # scheduled run repeats the whole kill/relaunch/verify cycle fresh.
+        print(f"ERROR: {new_url} did not become healthy within {PUBLISH_HEALTH_TIMEOUT_S}s "
+              "-- not publishing. Will retry on the next scheduled run.")
+        raise SystemExit(1)
+
     _update_gh_pages(new_url)
     print("gh-pages redirect updated and pushed.")
 

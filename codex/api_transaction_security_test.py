@@ -12,7 +12,6 @@ Usage from repo root:
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,26 +22,16 @@ BACKEND = ROOT / "backend"
 if not BACKEND.exists() and (ROOT / "main.py").exists():
     BACKEND = ROOT
 sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _env import load_env_file  # noqa: E402
 
-def load_env_file(path: Path) -> None:
-    if not path.exists():
-        return
-    raw_bytes = path.read_bytes()
-    text = raw_bytes.decode("utf-16", errors="ignore") if b"\x00" in raw_bytes else raw_bytes.decode("utf-8", errors="replace")
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if "\x00" not in key and "\x00" not in value:
-            os.environ.setdefault(key, value)
-
-
-load_env_file(ROOT / "backend.env")
-load_env_file(ROOT / "postgres.env")
+# .env, not backend.env/postgres.env -- those are generated/legacy files
+# per .claude/CLAUDE.md's "Do Not Touch" list, not the real config source
+# (config.py's Settings(env_file=".env") is). Found live via code review:
+# the previous backend.env/postgres.env copies could silently diverge from
+# the real .env this script actually needs to test against.
+load_env_file(ROOT / ".env")
 
 import httpx  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E402

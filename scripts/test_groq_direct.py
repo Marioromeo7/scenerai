@@ -9,7 +9,7 @@ pre-written or content-specific.
 
 Usage:
     python scripts/test_groq_direct.py "your scenario description here"
-    python scripts/test_groq_direct.py --model llama-3.3-70b-versatile "..."
+    python scripts/test_groq_direct.py --model openai/gpt-oss-120b "..."
 """
 import argparse
 import os
@@ -25,7 +25,7 @@ from groq import Groq
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("prompt", help="the scenario/prompt text to send to Groq, as-is")
-    p.add_argument("--model", default="llama-3.3-70b-versatile", help="Groq model ID")
+    p.add_argument("--model", default="openai/gpt-oss-120b", help="Groq model ID")
     p.add_argument("--system", default="", help="optional system prompt")
     p.add_argument("--max-tokens", type=int, default=800)
     args = p.parse_args()

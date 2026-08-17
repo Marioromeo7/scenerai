@@ -140,9 +140,18 @@ async def _sleep(seconds):
     await asyncio.sleep(seconds)
 
 
-async def player_flow(base_url, client_id, concurrency_at_start, thresholds, turns=None, timeout=120.0):
+async def player_flow(base_url, client_id, concurrency_at_start, thresholds, turns=None, timeout=240.0):
     """login (register) -> browse published scenario -> create session ->
-    poll status -> N scripted turns -> verify history -> end session."""
+    poll status -> N scripted turns -> verify history -> end session.
+
+    timeout=240s, not the previous 120s -- the committed thresholds.json
+    baseline itself records a real turn_2 latency of 160020.2ms (Groq
+    rate-limit backoff, expected/correct behavior per this module's own
+    docstring on latency_breach). A 120s httpx client timeout aborted that
+    call before it could complete, recording it as hard_error and ending
+    the client's flow before it ever reached later turns -- reintroducing
+    exactly the "a slow step must not abort the rest of the flow" bug this
+    module's docstring says was already fixed once."""
     result = ClientResult(client_id, "player", concurrency_at_start)
     turns = turns or PLAYER_TURNS
     # pydantic's EmailStr checks domain deliverability (MX records), which rejects
@@ -227,7 +236,7 @@ async def player_flow(base_url, client_id, concurrency_at_start, thresholds, tur
     return result
 
 
-async def creator_flow(base_url, client_id, concurrency_at_start, thresholds, timeout=120.0):
+async def creator_flow(base_url, client_id, concurrency_at_start, thresholds, timeout=240.0):
     """login (register) -> create scenario -> publish -> poll prefab_status ->
     preview session (1 turn) -> end."""
     result = ClientResult(client_id, "creator", concurrency_at_start)

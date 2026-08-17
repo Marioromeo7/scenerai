@@ -20,14 +20,16 @@ The core product is the narrative engine in `backend/engine/`. On first play:
 ## Key Files
 | File | Role |
 |------|------|
-| `backend/main.py` | All API routes (573 lines) |
+| `backend/main.py` | All API routes (1100+ lines) |
 | `backend/engine/engine.py` | Engine class + `scenario_to_engine()` |
 | `backend/engine/inference.py` | LLM inference: language, NPCs, system prompt, guard |
 | `backend/engine/call.py` | Groq client wrapper with retry logic |
 | `backend/engine/types.py` | Dataclasses: Entity, WorldState, Memory, ContentFilter |
 | `backend/ai_service.py` | Async bridge between FastAPI and sync engine |
 | `backend/engine/serializer.py` | Engine ↔ dict serialization for Redis |
-| `frontend/app/src/App.jsx` | Entire frontend (49KB, one file) |
+| `backend/worker.py` | arq background jobs: prefab, session init, per-turn media, session movie |
+| `backend/video_utils.py` | Shared ffmpeg concat helper (export + session movie) |
+| `frontend/app/src/App.jsx` | Entire frontend (1700+ lines, one file) |
 | `frontend/app/src/api.js` | API client |
 
 ## Canonical Frontend
@@ -45,9 +47,9 @@ Backend at `:9000`, frontend at `:3000`, nginx at `:80`.
 ## Known Architecture Decisions
 - `time.sleep()` inside `call()` for rate-limit backoff — acceptable because called via `asyncio.to_thread()`
 - SSE streaming is "fake-streaming": Groq tokens are buffered internally, guard runs on the full response, then re-chunked in 24-char pieces for the client. This is intentional because the guard requires the complete response.
-- `_prefab_sem = asyncio.Semaphore(2)` limits concurrent prefab jobs globally (single-process only)
-- JWT expiry is 7 days, no refresh tokens
+- Prefab concurrency is capped by `worker.py`'s `PREFAB_JOB_KEY` — a Redis `incr`/`decr` counter with `PREFAB_MAX = 2`, not an in-process `asyncio.Semaphore`. Deliberately cross-process (works across multiple worker replicas, not just within one), unlike a semaphore.
+- JWT access tokens are short-lived (30 min, `config.py`'s `jwt_expire_minutes`), backed by a full refresh-token system (`refresh_tokens.py`: issuance, single-use rotation via Redis `GETDEL`, revocation) — not the original 7-day-no-refresh design.
 
 ## Do Not Touch
 - `backend/alembic/` — migrations are append-only
-- `postgres.env`, `redis.env`, `backend.env` — generated/legacy files, do not use as config sources
+- `postgres.env`, `redis.env`, `backend.env` — generated/legacy files, do not use as config sources anywhere in the repo, `codex/` included (`config.py`'s `Settings(env_file=".env")` is the one real source of truth).

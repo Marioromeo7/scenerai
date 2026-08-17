@@ -209,20 +209,32 @@ async def run_repeats_async(only_key, target, max_repeats):
             continue  # always do at least `target` reps before checking noise
 
         stats = _noise_stats([r["overall_axis_means"] for r in runs])
+        # unmeasured (stdev=None, fewer than 2 reps so far) is NOT the same
+        # claim as noisy (stdev computed and it's high) -- found via code
+        # review: the old check only looked at noisy_axes, so with
+        # --repeats 1 every axis's unmeasurable stdev=None was silently
+        # treated as "not noisy," and the harness declared "all axes below
+        # stdev 0.3" after a single, statistically meaningless rep.
+        unmeasured_axes = [axis for axis, s in stats.items() if s["stdev"] is None]
         noisy_axes = [axis for axis, s in stats.items() if s["stdev"] is not None and s["stdev"] > NOISY_STDEV_THRESHOLD]
         print(f"\n--- noise check after {n} reps ---")
         for axis, s in stats.items():
-            flag = "  <- NOISY" if axis in noisy_axes else ""
+            flag = "  <- NOISY" if axis in noisy_axes else ("  <- not yet measurable (n<2)" if axis in unmeasured_axes else "")
             print(f"  {axis}: mean={s['mean']} stdev={s['stdev']} min={s['min']} max={s['max']}{flag}")
 
-        if not noisy_axes:
-            print(f"\nStop condition met: all axes below stdev {NOISY_STDEV_THRESHOLD} after {n} reps.")
+        if not noisy_axes and not unmeasured_axes:
+            print(f"\nStop condition met: all axes measured and below stdev {NOISY_STDEV_THRESHOLD} after {n} reps.")
             break
         if n >= max_repeats:
-            print(f"\nStop condition: reached max_repeats={max_repeats} with {noisy_axes} still above "
-                  f"stdev {NOISY_STDEV_THRESHOLD}. Reporting honestly as unresolved noise, not forcing a number.")
+            if unmeasured_axes:
+                print(f"\nStop condition: reached max_repeats={max_repeats} with {unmeasured_axes} still "
+                      f"unmeasurable (fewer than 2 reps ever completed) and {noisy_axes or 'none'} above "
+                      f"stdev {NOISY_STDEV_THRESHOLD}. Not claiming a noise figure that was never actually computed.")
+            else:
+                print(f"\nStop condition: reached max_repeats={max_repeats} with {noisy_axes} still above "
+                      f"stdev {NOISY_STDEV_THRESHOLD}. Reporting honestly as unresolved noise, not forcing a number.")
             break
-        print(f"Still noisy on {noisy_axes} — running another rep ({n + 1}/{max_repeats}).")
+        print(f"Still noisy/unmeasured on {noisy_axes + unmeasured_axes} — running another rep ({n + 1}/{max_repeats}).")
 
     stats = _noise_stats([r["overall_axis_means"] for r in runs])
     summary = {
@@ -253,7 +265,11 @@ def main():
     args = p.parse_args()
 
     if args.repeats:
-        max_repeats = args.max_repeats or args.repeats * 2
+        # `or` (not `is not None`) previously meant --max-repeats 0 was
+        # silently discarded and replaced with args.repeats * 2, since 0 is
+        # falsy -- found via code review. An explicit 0 (or any other
+        # falsy-but-valid value) must be honored, not overridden.
+        max_repeats = args.max_repeats if args.max_repeats is not None else args.repeats * 2
         asyncio.run(run_repeats_async(args.only, args.repeats, max_repeats))
     else:
         client = make_client(settings.groq_api_key)

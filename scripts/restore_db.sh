@@ -36,13 +36,22 @@ if [ "$AUTO_YES" -ne 1 ]; then
     esac
 fi
 
-COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml"
+# Each call quotes "$PROJECT_ROOT/docker-compose.yml" inline (matching
+# backup_db.sh's pattern) rather than building a reusable $COMPOSE string
+# and expanding it unquoted -- found via code review: the unquoted form
+# word-splits PROJECT_ROOT on any spaces in the path (e.g. a Windows user
+# profile like "C:/Users/John Doe/..."), and this script is destructive
+# enough (drops the database first) that a broken restore command after
+# that point would leave the database dropped with nothing restored.
 
 echo "Dropping and recreating database..."
-$COMPOSE exec -T postgres psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS scenarai;"
-$COMPOSE exec -T postgres psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE scenarai;"
+docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T postgres \
+    psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS scenarai;"
+docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T postgres \
+    psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE scenarai;"
 
 echo "Restoring from $BACKUP_FILE ..."
-gunzip -c "$BACKUP_FILE" | $COMPOSE exec -T postgres psql -U "$POSTGRES_USER" -d scenarai
+gunzip -c "$BACKUP_FILE" | docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T postgres \
+    psql -U "$POSTGRES_USER" -d scenarai
 
 echo "Restore complete."
