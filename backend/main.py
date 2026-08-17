@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 from datetime import datetime, timezone
 from typing import List, Optional
-import uuid, json, os
+import uuid
+import json
+import os
 
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -28,7 +30,9 @@ from slowapi.errors import RateLimitExceeded
 
 from config import settings
 from database import get_db, get_redis, close_connections, AsyncSessionLocal
-from models import User, Persona, Scenario, ScenarioSave, SessionLog, TurnRating, TurnMedia, SubscriptionTier, UserSubscription
+from models import (
+    User, Persona, Scenario, ScenarioSave, SessionLog, TurnRating, TurnMedia, SubscriptionTier, UserSubscription,
+)
 from schemas import (
     UserCreate, UserLogin, UserOut, Token, RefreshRequest, LogoutRequest,
     PersonaCreate, PersonaOut, PersonaUpdate,
@@ -60,7 +64,8 @@ async def lifespan(app: FastAPI):
     # Schema is managed by Alembic (runs in Dockerfile before uvicorn starts).
     # create_all is intentionally removed to avoid conflicts with migration tracking.
     if settings.jwt_secret == "dev_secret":
-        logger.warning("SECURITY: jwt_secret is using the insecure default. Set JWT_SECRET in .env before any non-local deployment.")
+        logger.warning("SECURITY: jwt_secret is using the insecure default. "
+                       "Set JWT_SECRET in .env before any non-local deployment.")
     if "changeme" in settings.database_url:
         logger.warning("SECURITY: database_url contains the default 'changeme' password. Set DATABASE_URL in .env.")
     if not settings.groq_api_key:
@@ -148,7 +153,8 @@ async def me(cu: User = Depends(get_current_user)):
 
 @app.post("/auth/change-password", status_code=204)
 @limiter.limit("5/minute")
-async def change_password(request: Request, body: PasswordChange, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def change_password(request: Request, body: PasswordChange, db: AsyncSession = Depends(get_db),
+                           cu: User = Depends(get_current_user)):
     if not verify_password(body.current_password, cu.hashed_password):
         raise HTTPException(401, "Current password is incorrect")
     cu.hashed_password = hash_password(body.new_password)
@@ -169,7 +175,8 @@ async def create_persona(body: PersonaCreate, db: AsyncSession = Depends(get_db)
     return PersonaOut.model_validate(p)
 
 @app.get("/personas")
-async def list_personas(cursor: str = None, limit: int = 20, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def list_personas(cursor: str = None, limit: int = 20, db: AsyncSession = Depends(get_db),
+                         cu: User = Depends(get_current_user)):
     limit = min(max(limit, 1), 50)
     query = select(Persona).where(Persona.user_id == cu.id).order_by(Persona.created_at.desc())
     if cursor:
@@ -187,7 +194,8 @@ async def list_personas(cursor: str = None, limit: int = 20, db: AsyncSession = 
     return {"items": [PersonaOut.model_validate(p) for p in items], "next_cursor": next_cursor, "has_more": has_more}
 
 @app.put("/personas/{pid}", response_model=PersonaOut)
-async def update_persona(pid: str, body: PersonaUpdate, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def update_persona(pid: str, body: PersonaUpdate, db: AsyncSession = Depends(get_db),
+                          cu: User = Depends(get_current_user)):
     p = (await db.execute(select(Persona).where(Persona.id == pid, Persona.user_id == cu.id))).scalar_one_or_none()
     if not p: raise HTTPException(404, "Persona not found")
     if body.name is not None: p.name = body.name
@@ -207,7 +215,8 @@ async def delete_persona(pid: str, db: AsyncSession = Depends(get_db), cu: User 
 
 @app.post("/scenarios", response_model=ScenarioOut, status_code=201)
 @limiter.limit("10/minute")
-async def create_scenario(request: Request, body: ScenarioCreate, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def create_scenario(request: Request, body: ScenarioCreate, db: AsyncSession = Depends(get_db),
+                           cu: User = Depends(get_current_user)):
     char_personality = sanitize_input(body.char_personality)
     greeting         = sanitize_input(body.greeting)
     meta = await generate_scenario_metadata(body.char_name, body.char_title, char_personality, greeting)
@@ -227,7 +236,8 @@ async def create_scenario(request: Request, body: ScenarioCreate, db: AsyncSessi
 
 
 @app.get("/scenarios")
-async def list_scenarios(cursor: str = None, limit: int = 20, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def list_scenarios(cursor: str = None, limit: int = 20, db: AsyncSession = Depends(get_db),
+                          cu: User = Depends(get_current_user)):
     limit = min(max(limit, 1), 50)
     query = select(Scenario).where(Scenario.creator_id == cu.id).order_by(Scenario.created_at.desc())
     if cursor:
@@ -274,8 +284,11 @@ async def get_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = 
     return ScenarioOut.model_validate(s)
 
 @app.put("/scenarios/{sid}", response_model=ScenarioOut)
-async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id))).scalar_one_or_none()
+async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Depends(get_db),
+                           cu: User = Depends(get_current_user)):
+    s = (await db.execute(
+        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
+    )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
     if s.is_published:
         raise HTTPException(403, "Published scenarios cannot be edited")
@@ -289,7 +302,9 @@ async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Dep
 
 @app.delete("/scenarios/{sid}", status_code=204)
 async def delete_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id))).scalar_one_or_none()
+    s = (await db.execute(
+        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
+    )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
     if s.is_published:
         raise HTTPException(400, "Published scenarios cannot be deleted. Contact support to unpublish.")
@@ -321,8 +336,11 @@ async def _enqueue_prefab_job(request: Request, db: AsyncSession, s: Scenario):
 
 
 @app.post("/scenarios/{sid}/publish", response_model=ScenarioOut)
-async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id))).scalar_one_or_none()
+async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depends(get_db),
+                            cu: User = Depends(get_current_user)):
+    s = (await db.execute(
+        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
+    )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
     if s.is_published: raise HTTPException(400, "Scenario already published")
     s.is_published = True
@@ -333,8 +351,11 @@ async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depend
 
 @app.post("/scenarios/{sid}/retry-prefab", response_model=ScenarioOut)
 @limiter.limit("5/minute")
-async def retry_prefab(sid: str, request: Request, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id))).scalar_one_or_none()
+async def retry_prefab(sid: str, request: Request, db: AsyncSession = Depends(get_db),
+                        cu: User = Depends(get_current_user)):
+    s = (await db.execute(
+        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
+    )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
     if not s.is_published: raise HTTPException(400, "Scenario is not published")
     if s.prefab_status == "ready": raise HTTPException(400, "Prefab is already ready")
@@ -345,7 +366,9 @@ async def retry_prefab(sid: str, request: Request, db: AsyncSession = Depends(ge
 
 @app.post("/scenarios/{sid}/unpublish", response_model=ScenarioOut)
 async def unpublish_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id))).scalar_one_or_none()
+    s = (await db.execute(
+        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
+    )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
     if not s.is_published: raise HTTPException(400, "Scenario is not published")
     s.is_published = False
@@ -356,11 +379,15 @@ async def unpublish_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: U
 
 @app.post("/scenarios/{sid}/report", status_code=201)
 @limiter.limit("10/minute")
-async def report_scenario(request: Request, sid: str, body: ScenarioReport, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(select(Scenario).where(Scenario.id == sid, Scenario.is_published == True))).scalar_one_or_none()  # noqa: E712
+async def report_scenario(request: Request, sid: str, body: ScenarioReport,
+                           db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+    s = (await db.execute(
+        select(Scenario).where(Scenario.id == sid, Scenario.is_published == True)  # noqa: E712
+    )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
     redis = await get_redis()
-    report = {"scenario_id": sid, "reporter_id": cu.id, "reason": body.reason, "created_at": datetime.now(timezone.utc).isoformat()}
+    report = {"scenario_id": sid, "reporter_id": cu.id, "reason": body.reason,
+              "created_at": datetime.now(timezone.utc).isoformat()}
     await redis.lpush("scenario_reports", json.dumps(report))
     await redis.ltrim("scenario_reports", 0, 9999)
     return {"reported": True}
@@ -370,7 +397,10 @@ async def save_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User =
     s = (await db.execute(select(Scenario).where(Scenario.id == sid))).scalar_one_or_none()
     if not s or (s.creator_id != cu.id and not (s.is_public and s.is_published)):
         raise HTTPException(404, "Scenario not found")
-    if (await db.execute(select(ScenarioSave).where(ScenarioSave.user_id == cu.id, ScenarioSave.scenario_id == sid))).scalar_one_or_none():
+    already_saved = (await db.execute(
+        select(ScenarioSave).where(ScenarioSave.user_id == cu.id, ScenarioSave.scenario_id == sid)
+    )).scalar_one_or_none()
+    if already_saved:
         return {"saved": True}
     db.add(ScenarioSave(id=str(uuid.uuid4()), user_id=cu.id, scenario_id=sid))
     await db.execute(update(Scenario).where(Scenario.id == sid).values(saves_count=Scenario.saves_count + 1))
@@ -378,10 +408,15 @@ async def save_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User =
 
 @app.delete("/scenarios/{sid}/save", status_code=204)
 async def unsave_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    sv = (await db.execute(select(ScenarioSave).where(ScenarioSave.user_id == cu.id, ScenarioSave.scenario_id == sid))).scalar_one_or_none()
+    sv = (await db.execute(
+        select(ScenarioSave).where(ScenarioSave.user_id == cu.id, ScenarioSave.scenario_id == sid)
+    )).scalar_one_or_none()
     if sv:
         await db.delete(sv)
-        await db.execute(update(Scenario).where(Scenario.id == sid).values(saves_count=func.greatest(Scenario.saves_count - 1, 0)))
+        await db.execute(
+            update(Scenario).where(Scenario.id == sid)
+            .values(saves_count=func.greatest(Scenario.saves_count - 1, 0))
+        )
         await db.commit()
 
 
@@ -515,7 +550,9 @@ async def _upsert_session_log(ctx: dict, ended_at: datetime = None, db: AsyncSes
     if own_session:
         db = AsyncSessionLocal()
     try:
-        existing = (await db.execute(select(SessionLog).where(SessionLog.session_id == session_id))).scalar_one_or_none()
+        existing = (await db.execute(
+            select(SessionLog).where(SessionLog.session_id == session_id)
+        )).scalar_one_or_none()
         if existing:
             existing.history = clean_history
             existing.turns_count = ctx.get("turn", 0)
@@ -540,7 +577,8 @@ async def _upsert_session_log(ctx: dict, ended_at: datetime = None, db: AsyncSes
             await db.close()
 
 
-async def _execute_turn(request: Request, session_id: str, cu: User, redis, player_input: str, engine_model: str, mode: str):
+async def _execute_turn(request: Request, session_id: str, cu: User, redis,
+                         player_input: str, engine_model: str, mode: str):
     """Shared by play_turn / continue_turn / regenerate_turn — identical
     lock/checkpoint/plays_count handling in all three; only which ai_service
     call gets made, and what it's called with, differs. mode is one of
@@ -590,7 +628,10 @@ async def _execute_turn(request: Request, session_id: str, cu: User, redis, play
         # that already happened, or re-bill turn 1 as a second "first play."
         if result["turn"] == 1 and not ctx.get("preview") and mode != "regenerate":
             async with AsyncSessionLocal() as db:
-                await db.execute(update(Scenario).where(Scenario.id == ctx["scenario_id"]).values(plays_count=Scenario.plays_count + 1))
+                await db.execute(
+                    update(Scenario).where(Scenario.id == ctx["scenario_id"])
+                    .values(plays_count=Scenario.plays_count + 1)
+                )
                 await db.commit()
 
         if mode == "regenerate":
@@ -616,7 +657,9 @@ async def _execute_turn(request: Request, session_id: str, cu: User, redis, play
                     media_context["voice_id"], media_context["voice_speed"],
                 )
             except Exception as e:
-                logger.warning(f"Failed to enqueue turn media job for session={session_id[:8]} turn={result['turn']}: {e}")
+                logger.warning(
+                    f"Failed to enqueue turn media job for session={session_id[:8]} turn={result['turn']}: {e}"
+                )
     finally:
         await redis.delete(lock_key)
 
@@ -633,7 +676,8 @@ async def _execute_turn(request: Request, session_id: str, cu: User, redis, play
 
 @app.post("/sessions/{session_id}/turn", response_model=PlayResponse)
 @limiter.limit("60/minute")
-async def play_turn(session_id: str, request: Request, body: PlayTurnWithModel, cu: User = Depends(enforce_user_rate_limit)):
+async def play_turn(session_id: str, request: Request, body: PlayTurnWithModel,
+                     cu: User = Depends(enforce_user_rate_limit)):
     redis = await get_redis()
     return await _execute_turn(request, session_id, cu, redis, body.input, body.engine_model, mode="turn")
 
@@ -666,7 +710,8 @@ async def rate_turn(session_id: str, turn: int, body: TurnRatingCreate,
     the Redis session: ratings must survive session TTL/end, and preview
     sessions never get a SessionLog row to check against anyway."""
     existing = (await db.execute(
-        select(TurnRating).where(TurnRating.user_id == cu.id, TurnRating.session_id == session_id, TurnRating.turn == turn)
+        select(TurnRating).where(TurnRating.user_id == cu.id, TurnRating.session_id == session_id,
+                                 TurnRating.turn == turn)
     )).scalar_one_or_none()
     if existing:
         existing.rating = body.rating
@@ -823,7 +868,9 @@ async def mock_subscribe(tier_id: str, db: AsyncSession = Depends(get_db), cu: U
     tier = (await db.execute(select(SubscriptionTier).where(SubscriptionTier.id == tier_id))).scalar_one_or_none()
     if not tier:
         raise HTTPException(404, "Unknown tier")
-    existing = (await db.execute(select(UserSubscription).where(UserSubscription.user_id == cu.id))).scalar_one_or_none()
+    existing = (await db.execute(
+        select(UserSubscription).where(UserSubscription.user_id == cu.id)
+    )).scalar_one_or_none()
     if existing:
         existing.tier_id = tier_id
         existing.status = "active"
@@ -867,7 +914,8 @@ async def get_telemetry(db: AsyncSession = Depends(get_db), _admin: User = Depen
 
 @app.post("/sessions/{session_id}/turn-stream")
 @limiter.limit("60/minute")
-async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWithModel, cu: User = Depends(enforce_user_rate_limit)):
+async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWithModel,
+                            cu: User = Depends(enforce_user_rate_limit)):
     redis = await get_redis()
     raw = await redis.get(f"session:{session_id}")
     if not raw: raise HTTPException(404, "Session expired or not found")
@@ -894,13 +942,17 @@ async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWith
                 elif chunk.get("type") == "done":
                     redis_local = await get_redis()
                     ctx["engine_state"] = chunk["engine_state"]
-                    ctx["history"] = chunk["engine_state"].get("display_history") or chunk["engine_state"].get("history", [])
+                    ctx["history"] = (chunk["engine_state"].get("display_history")
+                                       or chunk["engine_state"].get("history", []))
                     ctx["turn"] = chunk["turn"]
                     await redis_local.setex(f"session:{session_id}", SESSION_TTL, json.dumps(ctx))
                     await _upsert_session_log(ctx)
                     if chunk["turn"] == 1 and not ctx.get("preview"):
                         async with AsyncSessionLocal() as db:
-                            await db.execute(update(Scenario).where(Scenario.id == ctx["scenario_id"]).values(plays_count=Scenario.plays_count + 1))
+                            await db.execute(
+                                update(Scenario).where(Scenario.id == ctx["scenario_id"])
+                                .values(plays_count=Scenario.plays_count + 1)
+                            )
                             await db.commit()
                     media_context = chunk.get("media_context")
                     if media_context:
@@ -911,7 +963,10 @@ async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWith
                                 media_context["voice_id"], media_context["voice_speed"],
                             )
                         except Exception as e:
-                            logger.warning(f"Failed to enqueue turn media job (stream) for session={session_id[:8]} turn={chunk['turn']}: {e}")
+                            logger.warning(
+                                f"Failed to enqueue turn media job (stream) for "
+                                f"session={session_id[:8]} turn={chunk['turn']}: {e}"
+                            )
                     yield f"data: {json.dumps(chunk)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -951,7 +1006,8 @@ async def end_session(session_id: str, db: AsyncSession = Depends(get_db), cu: U
 
 
 @app.get("/sessions/history")
-async def session_history(cursor: str = None, limit: int = 20, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def session_history(cursor: str = None, limit: int = 20, db: AsyncSession = Depends(get_db),
+                           cu: User = Depends(get_current_user)):
     limit = min(max(limit, 1), 50)
     query = select(SessionLog).where(SessionLog.user_id == cu.id).order_by(SessionLog.started_at.desc())
     if cursor:
@@ -987,7 +1043,8 @@ async def session_history(cursor: str = None, limit: int = 20, db: AsyncSession 
     return {"items": out, "next_cursor": next_cursor, "has_more": has_more}
 
 @app.get("/sessions/{session_id}/history")
-async def get_session_history(session_id: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def get_session_history(session_id: str, db: AsyncSession = Depends(get_db),
+                               cu: User = Depends(get_current_user)):
     r = await db.execute(select(SessionLog).where(SessionLog.session_id == session_id, SessionLog.user_id == cu.id))
     log = r.scalar_one_or_none()
     if not log: raise HTTPException(404, "Session not found")

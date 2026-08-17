@@ -39,6 +39,7 @@ async def enforce_user_rate_limit(
     if count > MAX_REQUESTS_PER_WINDOW:
         raise HTTPException(
             status_code=429,
-            detail=f"Too many requests — max {MAX_REQUESTS_PER_WINDOW} per {WINDOW_SECONDS}s. Slow down and try again shortly.",
+            detail=(f"Too many requests — max {MAX_REQUESTS_PER_WINDOW} per {WINDOW_SECONDS}s. "
+                    "Slow down and try again shortly."),
         )
     return user

@@ -176,7 +176,7 @@ class TestFallback:
             mock.side_effect = [
                 (VIOLATED, 0.1),                    # sovereignty: violated
                 (VALID, 0.1),                       # validator: ok
-                ('You step forward slightly.', 0.2), # repair LLM (still violating)
+                ('You step forward slightly.', 0.2),  # repair LLM (still violating)
                 (VIOLATED, 0.1),                    # sovereignty on repair: still violated
                 (VALID, 0.1),                       # validator on repair: ok
                 ('A tense silence settles.', 0.2),  # fallback LLM
@@ -220,7 +220,7 @@ class TestH2Fix:
             mock.side_effect = [
                 (VIOLATED, 0.1),          # sovereignty: violated
                 (VALID, 0.1),             # validator: ok
-                RuntimeError('API down'), # repair LLM raises
+                RuntimeError('API down'),  # repair LLM raises
             ]
             result, meta = guard_response(
                 original, 'Walk.', persona, entities, world, memory, layer1
@@ -242,7 +242,7 @@ class TestH2Fix:
                 (repair, 0.2),             # repair LLM
                 (VIOLATED, 0.1),           # sovereignty on repair: still violated
                 (VALID, 0.1),              # validator on repair: ok
-                RuntimeError('fallback!'), # fallback LLM raises (inner try/except)
+                RuntimeError('fallback!'),  # fallback LLM raises (inner try/except)
             ]
             result, meta = guard_response(
                 original, 'Walk.', persona, entities, world, memory, layer1

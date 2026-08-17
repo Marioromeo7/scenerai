@@ -30,6 +30,7 @@ def _open_side_effect_no_state_file():
     FileNotFoundError (simulating no movie_state.json yet), writes succeed
     via a real mock_open handle."""
     writer = mock_open()
+
     def _side_effect(path, mode='r', *args, **kwargs):
         if 'w' not in mode:
             raise FileNotFoundError()

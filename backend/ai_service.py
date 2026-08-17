@@ -55,7 +55,8 @@ async def _reserve_turn_budget(estimated_tokens: int = TURN_TOKEN_ESTIMATE):
     as a capacity/retry message, not let the turn fire into a near-certain
     429 storm."""
     redis = await get_redis()
-    ok = await reserve_token_budget(redis, estimated_tokens, max_wait=60.0 if estimated_tokens > TURN_TOKEN_ESTIMATE else 30.0)
+    max_wait = 60.0 if estimated_tokens > TURN_TOKEN_ESTIMATE else 30.0
+    ok = await reserve_token_budget(redis, estimated_tokens, max_wait=max_wait)
     if not ok:
         raise RuntimeError("Groq capacity is fully booked right now — try again shortly.")
 
@@ -247,7 +248,8 @@ async def engine_init_from_prefab(
     state['filter_lock']     = False
     state['turn']            = 0
     state['metrics']         = {'turns': 0, 'sv_violations': 0, 'latencies': [], 'compressions': 0}
-    opening_msg              = state['display_history'][0] if state['display_history'] else {'role': 'assistant', 'content': greeting}
+    opening_msg              = (state['display_history'][0] if state['display_history']
+                                 else {'role': 'assistant', 'content': greeting})
     state['history']         = [opening_msg]
     state['display_history'] = [opening_msg]
 

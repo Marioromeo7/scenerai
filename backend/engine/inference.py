@@ -282,7 +282,8 @@ def infer_characters(entities, opening, layer1, sp_note=''):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(npcs)) as pool:
         futures = [
-            pool.submit(contextvars.copy_context().run, _infer_single_npc, e, entities, opening_copy, layer1_copy, sp_note)
+            pool.submit(contextvars.copy_context().run, _infer_single_npc, e, entities,
+                        opening_copy, layer1_copy, sp_note)
             for e in npcs
         ]
         for f in concurrent.futures.as_completed(futures):
@@ -465,7 +466,7 @@ def _extract_pronouns(search_term, context):
     )
     r = result.strip().lower()
     if 'she' in r: return 'she/her'
-    if 'he'  in r: return 'he/him'
+    if 'he' in r: return 'he/him'
     return 'they/them'
 
 
@@ -806,6 +807,7 @@ def guard_response(response, player_input, persona, entities, world, memory, lay
         'The narrator must never move, feel, think, decide, or speak for the player. '
         'Return ONLY valid JSON with keys: valid (boolean), violations (array of short strings).'
     )
+
     def _build_validator_payload(draft):
         return (
             f'PLAYER: {persona.name} ({persona.pronouns})\n'
@@ -917,7 +919,8 @@ def guard_response(response, player_input, persona, entities, world, memory, lay
                 if previous_response and _similar_response(fallback, previous_response):
                     try:
                         fallback_retry, _ = call(
-                            fallback_system + ' The last attempt repeated most of the previous response. Produce a genuinely different response now.',
+                            fallback_system + ' The last attempt repeated most of the previous response. '
+                            'Produce a genuinely different response now.',
                             [{'role': 'user', 'content': fallback_payload}],
                             max_tokens=260,
                             temp=0.9,

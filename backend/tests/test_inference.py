@@ -295,7 +295,7 @@ class TestCheckSovereignty:
             check_sovereignty('The Crowd cheers.', 'Alex', entities)
         user_content = mock.call_args[0][1][0]['content']
         # Only check the NPC line, not the response text (which may mention "The Crowd")
-        npc_line = [l for l in user_content.splitlines() if 'NPCs in this scene' in l]
+        npc_line = [line for line in user_content.splitlines() if 'NPCs in this scene' in line]
         assert npc_line, 'NPC line should be present'
         assert 'Iris' in npc_line[0]
         assert 'The Crowd' not in npc_line[0]

@@ -1,11 +1,14 @@
-from sqlalchemy import Column, String, Boolean, Integer, Float, DateTime, ForeignKey, Text, JSON, UniqueConstraint, Index
+from sqlalchemy import (
+    Column, String, Boolean, Integer, Float, DateTime, ForeignKey, Text, JSON, UniqueConstraint, Index,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
 import uuid
 
 
-def new_uuid(): return str(uuid.uuid4())
+def new_uuid():
+    return str(uuid.uuid4())
 
 
 class User(Base):
@@ -139,7 +142,8 @@ class UserSubscription(Base):
     which tier a user is on and whether that came from a real charge."""
     __tablename__ = "user_subscriptions"
     id                       = Column(String, primary_key=True, default=new_uuid)
-    user_id                  = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    user_id                  = Column(String, ForeignKey("users.id", ondelete="CASCADE"),
+                                       nullable=False, unique=True, index=True)
     tier_id                  = Column(String, ForeignKey("subscription_tiers.id"), nullable=False)
     status                   = Column(String, default="active")  # active | cancelled
     is_mock                  = Column(Boolean, default=True, nullable=False)

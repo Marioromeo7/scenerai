@@ -73,7 +73,8 @@ class TestEnginePrefabCallsReservationFirst:
     @pytest.mark.asyncio
     async def test_capacity_exhausted_blocks_before_scenario_build(self):
         with patch('ai_service.settings') as mock_settings, \
-             patch('ai_service._reserve_turn_budget', new=AsyncMock(side_effect=RuntimeError("fully booked"))) as mock_reserve, \
+             patch('ai_service._reserve_turn_budget',
+                   new=AsyncMock(side_effect=RuntimeError("fully booked"))) as mock_reserve, \
              patch('ai_service.scenario_to_engine') as mock_build:
             mock_settings.groq_api_key = 'fake-key'
             with pytest.raises(RuntimeError, match="fully booked"):

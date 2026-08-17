@@ -224,7 +224,8 @@ class Engine:
             sv = check_sovereignty(response, self.persona.name, self.entities)
             if not sv['clean']:
                 self.metrics['sv_violations'] += sv['count']
-                logger.warning('Sovereignty violation leaked through guard (hard block, regenerate): %s', sv['violations'])
+                logger.warning('Sovereignty violation leaked through guard (hard block, regenerate): %s',
+                               sv['violations'])
                 response = 'A tense silence holds. Nothing moves.'
 
             self.history.append({'role': 'assistant', 'content': response})
@@ -348,7 +349,8 @@ class Engine:
             if e.appearance:      logger.info(f'    Appearance   : {e.appearance[:120]}')
             if e.mood:            logger.info(f'    Mood         : {e.mood}')
             if e.behavioral_read: logger.info(f'    Behavioral   : {e.behavioral_read[:150]}')
-            if e.never_does:      logger.info(f'    NEVER        : {e.never_does}  (resolve {e.integrity_resolve * 100:.0f}%)')
+            if e.never_does:
+                logger.info(f'    NEVER        : {e.never_does}  (resolve {e.integrity_resolve * 100:.0f}%)')
         logger.info('  MEMORY')
         for f in self.memory.pinned:
             logger.info(f'  PIN: {f}')

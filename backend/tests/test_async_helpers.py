@@ -254,7 +254,7 @@ class TestFallbackDedup:
             mock.side_effect = [
                 (VIOLATED, 0.1),          # sovereignty on original
                 (VALID, 0.1),             # validator
-                ('You step forward.', 0.2), # repair
+                ('You step forward.', 0.2),  # repair
                 (VIOLATED, 0.1),          # sovereignty on repair: still violated
                 (VALID, 0.1),             # validator on repair
                 (prev, 0.2),              # fallback matches previous_response
