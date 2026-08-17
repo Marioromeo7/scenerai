@@ -12,6 +12,13 @@ per player turn (system prompt + history + response + guard call), that
 ceiling is roughly 1-4 turns/minute across the ENTIRE platform on this
 tier, not per user — see SESSION_SUMMARY.md.
 
+llama-3.1-8b-instant itself was decommissioned by Groq (see ai_service.py's
+ENGINE_MODELS comment) and DEFAULT_ENGINE_MODEL is now openai/gpt-oss-20b --
+TPM_LIMIT below is NOT re-verified against the new model's actual limit,
+which Groq may set differently per-model. Left as the last real
+measurement rather than a guessed number; re-measure via load testing
+before trusting this figure for capacity planning.
+
 Design: a Redis-backed sliding-window counter, same incr+expire pattern
 already used for worker.py's PREFAB_JOB_KEY concurrency gate. Callers
 reserve an estimated token budget BEFORE calling Groq; if that would

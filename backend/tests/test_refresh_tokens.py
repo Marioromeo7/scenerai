@@ -9,6 +9,7 @@ def _mock_redis():
     redis = AsyncMock()
     redis.set = AsyncMock()
     redis.get = AsyncMock()
+    redis.getdel = AsyncMock()
     redis.delete = AsyncMock()
     return redis
 
@@ -41,7 +42,7 @@ class TestRotateRefreshToken:
     @pytest.mark.asyncio
     async def test_valid_token_returns_user_id_and_new_token(self):
         redis = _mock_redis()
-        redis.get.return_value = "user-123"
+        redis.getdel.return_value = "user-123"
 
         result = await refresh_tokens.rotate_refresh_token(redis, "old-token")
 
@@ -51,31 +52,35 @@ class TestRotateRefreshToken:
         assert new_token != "old-token"
 
     @pytest.mark.asyncio
-    async def test_valid_token_deletes_old_token(self):
+    async def test_valid_token_atomically_gets_and_deletes_old_token(self):
+        # GETDEL, not a separate GET+DELETE pair -- a non-atomic pair is
+        # exactly the race two concurrent /auth/refresh calls with the same
+        # token could exploit to both mint a new token from one old one.
         redis = _mock_redis()
-        redis.get.return_value = "user-123"
+        redis.getdel.return_value = "user-123"
 
         await refresh_tokens.rotate_refresh_token(redis, "old-token")
 
-        redis.delete.assert_awaited_once_with("refresh_token:old-token")
+        redis.getdel.assert_awaited_once_with("refresh_token:old-token")
+        redis.delete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_invalid_token_returns_none(self):
         redis = _mock_redis()
-        redis.get.return_value = None
+        redis.getdel.return_value = None
 
         result = await refresh_tokens.rotate_refresh_token(redis, "bogus-token")
 
         assert result is None
-        redis.delete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reused_token_fails_second_time(self):
         """Rotation means a token is single-use -- simulates the real
-        sequence: first call succeeds (get returns the user), second call
-        on the SAME old token fails because it's already been deleted."""
+        sequence: first call succeeds (getdel returns and removes the
+        user), second call on the SAME old token fails because GETDEL
+        already consumed it."""
         redis = _mock_redis()
-        redis.get.side_effect = ["user-123", None]
+        redis.getdel.side_effect = ["user-123", None]
 
         first = await refresh_tokens.rotate_refresh_token(redis, "old-token")
         second = await refresh_tokens.rotate_refresh_token(redis, "old-token")

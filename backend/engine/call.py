@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 # asyncio.to_thread() copies the context, so engine threads also see the right client.
 _client_var:       contextvars.ContextVar = contextvars.ContextVar('groq_client')
 _async_client_var: contextvars.ContextVar = contextvars.ContextVar('groq_async_client')
-_model_var:        contextvars.ContextVar = contextvars.ContextVar('groq_model', default='llama-3.1-8b-instant')
+_model_var:        contextvars.ContextVar = contextvars.ContextVar('groq_model', default='openai/gpt-oss-20b')
 
 SUMMARY_EVERY = 8
 MAX_RAW_TURNS = 14
 
 
-def init_client(api_key: str, model: str = 'llama-3.1-8b-instant'):
+def init_client(api_key: str, model: str = 'openai/gpt-oss-20b'):
     _client_var.set(Groq(api_key=api_key))
     _async_client_var.set(AsyncGroq(api_key=api_key))
     _model_var.set(model)

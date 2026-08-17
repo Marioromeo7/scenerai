@@ -107,28 +107,26 @@ class TestExportSessionVideo:
 
     @pytest.mark.asyncio
     async def test_runs_ffmpeg_concat_and_returns_download_url(self):
+        # The actual ffmpeg subprocess/tempfile/atomic-replace mechanics
+        # are video_utils.concat_videos's own responsibility now (shared
+        # with worker.py's session-movie extension -- see
+        # test_video_utils.py) -- this test only needs to confirm
+        # _export_session_video calls it with the right paths and turns
+        # a success into the right response shape.
         import main
         from schemas import ExportRequest
         db = _mock_db(scalars_list=self._rows([1, 2]))
         user = MagicMock(id='u1')
 
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b'', b''))
-        proc.returncode = 0
-
-        with patch('main.asyncio.create_subprocess_exec', new=AsyncMock(return_value=proc)) as mock_exec, \
-             patch('builtins.open', new=MagicMock()), \
-             patch('main.os.path.exists', return_value=True), \
-             patch('main.os.remove') as mock_remove:
+        with patch('main.concat_videos', new=AsyncMock()) as mock_concat:
             result = await main._export_session_video('sess-1', ExportRequest(from_turn=1, to_turn=2), db, user)
 
         assert result.download_url.startswith('/media/sess-1/export_')
         assert result.turns == [1, 2]
-        mock_exec.assert_awaited_once()
-        args = mock_exec.await_args.args
-        assert args[0] == 'ffmpeg'
-        assert '-c:v' in args
-        mock_remove.assert_called_once()
+        mock_concat.assert_awaited_once()
+        input_paths, output_path = mock_concat.await_args.args
+        assert input_paths == ['/app/media/sess-1/1.mp4', '/app/media/sess-1/2.mp4']
+        assert output_path.startswith('/app/media/sess-1/export_') and output_path.endswith('.mp4')
 
     @pytest.mark.asyncio
     async def test_500_when_ffmpeg_fails(self):
@@ -137,14 +135,7 @@ class TestExportSessionVideo:
         db = _mock_db(scalars_list=self._rows([1]))
         user = MagicMock(id='u1')
 
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b'', b'ffmpeg blew up'))
-        proc.returncode = 1
-
-        with patch('main.asyncio.create_subprocess_exec', new=AsyncMock(return_value=proc)), \
-             patch('builtins.open', new=MagicMock()), \
-             patch('main.os.path.exists', return_value=True), \
-             patch('main.os.remove'):
+        with patch('main.concat_videos', new=AsyncMock(side_effect=RuntimeError('ffmpeg blew up'))):
             with pytest.raises(HTTPException) as exc_info:
                 await main._export_session_video('sess-1', ExportRequest(from_turn=1, to_turn=1), db, user)
         assert exc_info.value.status_code == 500

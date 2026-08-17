@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
 from typing import List, Optional
 import uuid
@@ -53,10 +54,26 @@ from ai_service import (
     ENGINE_MODELS, DEFAULT_ENGINE_MODEL,
 )
 from engine.inference import sanitize_input
+from video_utils import concat_videos
 
 SESSION_TTL = 60 * 60 * 12  # 12 hours
 
-limiter = Limiter(key_func=get_remote_address)
+
+def get_real_client_ip(request: Request) -> str:
+    """slowapi's default get_remote_address reads request.client.host,
+    which for every request through nginx -- the app's primary/only
+    production path -- is nginx's own container IP, not the real client.
+    Found live via code review: every @limiter.limit(...) route was
+    effectively a platform-wide limit in disguise (one abusive client
+    could 429-lock out everyone) rather than a per-client one. nginx
+    already sets X-Real-IP to the true connecting IP (see nginx.conf);
+    trust it when present, fall back to the raw connection for direct/dev
+    access that bypasses nginx."""
+    real_ip = request.headers.get("x-real-ip")
+    return real_ip or get_remote_address(request)
+
+
+limiter = Limiter(key_func=get_real_client_ip)
 
 
 @asynccontextmanager
@@ -275,6 +292,21 @@ async def list_public(cursor: str = None, limit: int = 20, db: AsyncSession = De
     next_cursor = items[-1].created_at.isoformat() if has_more and items else None
     return {"items": [ScenarioOut.model_validate(s) for s in items], "next_cursor": next_cursor, "has_more": has_more}
 
+@app.get("/scenarios/saved-ids")
+async def get_saved_scenario_ids(db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+    """The frontend's savedIds state has no other way to know which
+    scenarios a user saved in a previous session -- without this, every
+    fresh page load silently shows every scenario as unsaved even though
+    ScenarioSave rows are still there. A plain id list (not full
+    ScenarioOut objects) since that's all the star-icon UI needs.
+
+    Must be registered before /scenarios/{sid} below -- found live: FastAPI
+    matches routes in registration order, so with this route after the
+    {sid} one, a request for /scenarios/saved-ids was being swallowed by
+    get_scenario with sid='saved-ids' instead, returning a 404."""
+    rows = (await db.execute(select(ScenarioSave.scenario_id).where(ScenarioSave.user_id == cu.id))).scalars().all()
+    return {"ids": list(rows)}
+
 @app.get("/scenarios/{sid}", response_model=ScenarioOut)
 async def get_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
     s = (await db.execute(select(Scenario).where(Scenario.id == sid))).scalar_one_or_none()
@@ -402,7 +434,16 @@ async def save_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User =
         return {"saved": True}
     db.add(ScenarioSave(id=str(uuid.uuid4()), user_id=cu.id, scenario_id=sid))
     await db.execute(update(Scenario).where(Scenario.id == sid).values(saves_count=Scenario.saves_count + 1))
-    await db.commit(); return {"saved": True}
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Two concurrent saves (double-click, two tabs) both pass the
+        # already_saved=None check above and both insert -- the second
+        # commit hits ScenarioSave's UniqueConstraint(user_id, scenario_id).
+        # Found live via code review. The save already exists either way,
+        # so this is a no-op success, not an error.
+        await db.rollback()
+    return {"saved": True}
 
 @app.delete("/scenarios/{sid}/save", status_code=204)
 async def unsave_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
@@ -590,7 +631,14 @@ async def _execute_turn(request: Request, session_id: str, cu: User, redis,
     if not ctx.get("engine_state"): raise HTTPException(503, "Engine state missing")
 
     lock_key = f"lock:session:{session_id}"
-    acquired = await redis.set(lock_key, "1", nx=True, ex=60)
+    # 120s, matching play_turn_stream's lock on the same key pattern below --
+    # found live via code review that this used to be 60s here with no
+    # explanation for the asymmetry. 60s is undersized on its own:
+    # _reserve_turn_budget's own max_wait can be up to 60s under Groq
+    # rate-limit backoff, which could exhaust the whole lock window before
+    # the LLM call even starts, letting it expire mid-turn and opening the
+    # exact concurrent-write race this lock exists to prevent.
+    acquired = await redis.set(lock_key, "1", nx=True, ex=120)
     if not acquired:
         raise HTTPException(409, "A turn is already in progress for this session")
 
@@ -713,11 +761,25 @@ async def rate_turn(session_id: str, turn: int, body: TurnRatingCreate,
     )).scalar_one_or_none()
     if existing:
         existing.rating = body.rating
-        row = existing
+        await db.commit()
     else:
-        row = TurnRating(user_id=cu.id, session_id=session_id, turn=turn, rating=body.rating)
-        db.add(row)
-    await db.commit()
+        db.add(TurnRating(user_id=cu.id, session_id=session_id, turn=turn, rating=body.rating))
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Same race as save_scenario above: two concurrent ratings for
+            # the same turn both see existing=None and both insert. The
+            # second violates UniqueConstraint(user_id, session_id, turn);
+            # fall back to updating the row the other request just created
+            # instead of a raw 500 for what's a completely normal race
+            # (e.g. a double-click on a star rating).
+            await db.rollback()
+            existing = (await db.execute(
+                select(TurnRating).where(TurnRating.user_id == cu.id, TurnRating.session_id == session_id,
+                                         TurnRating.turn == turn)
+            )).scalar_one_or_none()
+            existing.rating = body.rating
+            await db.commit()
     return TurnRatingOut(session_id=session_id, turn=turn, rating=body.rating)
 
 
@@ -747,7 +809,20 @@ async def regenerate_turn_media(session_id: str, turn: int, request: Request,
     row.status = "pending"
     row.error = None
     await db.commit()
-    await request.app.state.arq_pool.enqueue_job("regenerate_turn_media_job", session_id, turn)
+    try:
+        await request.app.state.arq_pool.enqueue_job("regenerate_turn_media_job", session_id, turn)
+    except Exception as e:
+        # Unlike the other enqueue_job call sites (generate_turn_media_job
+        # off a turn), there's no "primary work" here that already
+        # succeeded independently -- media regeneration IS the whole
+        # point of this request, so a failed enqueue can't just be logged
+        # and ignored, or the row is left showing "pending" forever with
+        # nothing actually processing it.
+        logger.error(f"Failed to enqueue regenerate-media job for session={session_id[:8]} turn={turn}: {e}")
+        row.status = "failed"
+        row.error = "Could not queue regeneration job — try again shortly"
+        await db.commit()
+        raise HTTPException(503, "Could not queue regeneration job — try again shortly")
     return row
 
 
@@ -784,11 +859,10 @@ async def _export_session_video(session_id: str, body: ExportRequest, db: AsyncS
     concatenating a handful of already-generated short segments is a
     seconds-long ffmpeg call, not a GPU/CPU-heavy generation job.
 
-    Re-encodes (doesn't stream-copy) deliberately: each segment is stitched
-    independently by the bridge with its own timestamp base, and a real
-    concat test against two live-generated segments showed stream-copy
-    produces "Non-monotonic DTS" warnings at the splice point -- re-encoding
-    (fast preset, short clips) sidesteps that for a small time cost.
+    The actual concat work is video_utils.concat_videos, shared with
+    worker.py's session-movie extension -- this used to hand-roll its own
+    copy of the same ffmpeg flags without that helper's atomic-replace
+    safety; consolidated after code review flagged the duplication.
 
     Split from the route (same pattern as _execute_turn) so it's callable
     directly in tests without slowapi's rate-limit decorator needing a real
@@ -809,28 +883,15 @@ async def _export_session_video(session_id: str, body: ExportRequest, db: AsyncS
 
     session_dir = f"{EXPORT_MEDIA_ROOT}/{session_id}"
     export_id = uuid.uuid4().hex[:12]
-    filelist_path = f"{session_dir}/export_{export_id}.txt"
     output_name = f"export_{export_id}.mp4"
     output_path = f"{session_dir}/{output_name}"
-
-    with open(filelist_path, "w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(f"file '{session_dir}/{row.turn}.mp4'\n")
+    input_paths = [f"{session_dir}/{row.turn}.mp4" for row in rows]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", filelist_path,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "aac", "-movflags", "+faststart", output_path,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            logger.error(f"Export failed for session {session_id[:8]}: {stderr.decode(errors='replace')[-800:]}")
-            raise HTTPException(500, "Export failed while combining scenes")
-    finally:
-        if os.path.exists(filelist_path):
-            os.remove(filelist_path)
+        await concat_videos(input_paths, output_path)
+    except RuntimeError as e:
+        logger.error(f"Export failed for session {session_id[:8]}: {e}")
+        raise HTTPException(500, "Export failed while combining scenes")
 
     return ExportOut(download_url=f"/media/{session_id}/{output_name}", turns=[r.turn for r in rows])
 
@@ -923,7 +984,7 @@ async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWith
     if not ctx.get("engine_state"): raise HTTPException(503, "Engine state missing")
 
     lock_key = f"lock:session:{session_id}"
-    acquired = await redis.set(lock_key, "1", nx=True, ex=120)
+    acquired = await redis.set(lock_key, "1", nx=True, ex=120)  # see _execute_turn's matching lock for why 120s
     if not acquired:
         raise HTTPException(409, "A turn is already in progress for this session")
 
@@ -994,6 +1055,16 @@ async def end_session(session_id: str, db: AsyncSession = Depends(get_db), cu: U
         await asyncio.sleep(0.3)
     else:
         logger.warning(f"end_session {session_id[:8]} proceeding while a turn may still be in flight")
+
+    # Re-read after the wait -- found live: checkpointing the `ctx` captured
+    # before the loop silently reverted the most recently completed turn.
+    # _execute_turn writes its fresh state back to this same Redis key
+    # before releasing the lock, so if a turn finished while we waited,
+    # the pre-wait snapshot is already stale and would overwrite that
+    # turn's real Postgres row with older history/engine_state/turn data.
+    raw = await redis.get(f"session:{session_id}")
+    if raw:
+        ctx = json.loads(raw)
 
     if not ctx.get("preview"):
         await _upsert_session_log(ctx, ended_at=datetime.now(timezone.utc), db=db)

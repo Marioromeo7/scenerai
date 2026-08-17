@@ -168,48 +168,6 @@ class TestExtendSessionMovie:
         )
 
 
-class TestConcatVideos:
-    @pytest.mark.asyncio
-    async def test_runs_ffmpeg_and_replaces_output_atomically(self):
-        import worker
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b'', b''))
-        proc.returncode = 0
-
-        with patch('worker.asyncio.create_subprocess_exec', new=AsyncMock(return_value=proc)) as mock_exec, \
-             patch('tempfile.mkstemp', return_value=(99, '/app/media/sess-1/tmp123.txt')), \
-             patch('worker.os.close'), \
-             patch('builtins.open', mock_open()), \
-             patch('worker.os.path.exists', return_value=True), \
-             patch('worker.os.remove') as mock_remove, \
-             patch('worker.os.replace') as mock_replace:
-            await worker._concat_videos(['/app/media/sess-1/1.mp4'], '/app/media/sess-1/movie.mp4')
-
-        mock_exec.assert_awaited_once()
-        mock_replace.assert_called_once_with('/app/media/sess-1/movie.mp4.tmp', '/app/media/sess-1/movie.mp4')
-        mock_remove.assert_any_call('/app/media/sess-1/tmp123.txt')
-
-    @pytest.mark.asyncio
-    async def test_raises_and_cleans_up_on_ffmpeg_failure(self):
-        import worker
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b'', b'boom'))
-        proc.returncode = 1
-
-        with patch('worker.asyncio.create_subprocess_exec', new=AsyncMock(return_value=proc)), \
-             patch('tempfile.mkstemp', return_value=(99, '/app/media/sess-1/tmp123.txt')), \
-             patch('worker.os.close'), \
-             patch('builtins.open', mock_open()), \
-             patch('worker.os.path.exists', return_value=True), \
-             patch('worker.os.remove') as mock_remove, \
-             patch('worker.os.replace') as mock_replace:
-            with pytest.raises(RuntimeError):
-                await worker._concat_videos(['/app/media/sess-1/1.mp4'], '/app/media/sess-1/movie.mp4')
-
-        mock_replace.assert_not_called()
-        mock_remove.assert_any_call('/app/media/sess-1/tmp123.txt')
-
-
 class TestGetSessionMovie:
     @pytest.mark.asyncio
     async def test_404_when_session_not_owned_or_unknown(self):

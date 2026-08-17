@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -10,6 +9,11 @@ from config import settings
 from database import get_redis, AsyncSessionLocal
 from models import Scenario, TurnMedia
 from ai_service import engine_prefab, engine_init, engine_init_from_prefab
+# Aliased (not just `from video_utils import concat_videos`) so the
+# existing `worker._concat_videos` patch target in tests/test_session_movie.py
+# keeps working unchanged -- this is a re-export of the same function
+# object now shared with main.py's /sessions/{id}/export, not a copy.
+from video_utils import concat_videos as _concat_videos
 
 # main.py configures this for the API process; the worker is a separate
 # process (own CMD in docker-compose) and needs its own setup, or every
@@ -38,13 +42,19 @@ async def prefab_engine_job(
     surfaced prefab_status instead of a silent permanent None."""
     redis = await get_redis()
     count = await redis.incr(PREFAB_JOB_KEY)
-    # Rolling TTL so a worker crash between incr and the finally-block decr
-    # (below) doesn't leak a permanently-stuck slot — arq's own max_jobs caps
-    # total concurrency across both job types, but this counter additionally
-    # protects Groq from being hit by up to max_jobs prefab jobs at once, each
-    # of which is 15-20 calls; without a bound here a leaked slot degrades
-    # prefab throughput forever instead of self-healing within a few minutes.
-    await redis.expire(PREFAB_JOB_KEY, 300)
+    # TTL set once, on the increment that creates the key (count == 1) --
+    # matches the expire-once pattern in rate_limiter.py/user_rate_limit.py.
+    # Found live via code review: this used to call expire() unconditionally
+    # on every job start, which under continuous publish traffic kept
+    # sliding the TTL forward before it could ever lapse. A worker crash
+    # between incr and the finally-block decr (below) would then leak this
+    # counter forever instead of self-healing within a few minutes as the
+    # docstring below claims -- arq's own max_jobs caps total concurrency
+    # across both job types, but this counter additionally protects Groq
+    # from being hit by up to max_jobs prefab jobs at once, each of which
+    # is 15-20 calls.
+    if count == 1:
+        await redis.expire(PREFAB_JOB_KEY, 300)
     if count > PREFAB_MAX:
         await redis.decr(PREFAB_JOB_KEY)
         logger.warning(f'Prefab skipped for {scenario_id[:8]}: too many concurrent jobs ({count - 1})')
@@ -125,6 +135,13 @@ async def init_engine_job(
             data["engine_state"] = engine_state
             data["status"]       = "ready"
             data["history"]      = engine_state.get("display_history") or engine_state.get("history", [])
+            # Found live via code review: on a resumed session (restored_engine_state
+            # branch above), the restored engine_state's own turn count was
+            # never copied up to the session ctx's top-level "turn" -- left
+            # stuck at the placeholder 0 until the player's next new turn,
+            # so GET /sessions/{id}/status reported turn=0 for an already-
+            # 5-turns-in session during that window.
+            data["turn"]         = engine_state.get("turn", data.get("turn", 0))
             await redis.setex(f"session:{session_id}", SESSION_TTL, json.dumps(data))
             logger.info(f'Session {session_id[:8]} initialized and ready')
     except Exception as e:
@@ -346,52 +363,6 @@ async def _extend_session_movie(session_id: str):
             await redis.delete(lock_key)
     except Exception as e:
         logger.error(f"Session movie extend failed for {session_id[:8]}: {e}")
-
-
-async def _concat_videos(input_paths: list[str], output_path: str):
-    """Shared ffmpeg concat-demuxer helper. Re-encodes rather than stream-
-    copies -- confirmed live (see /sessions/{id}/export in main.py) that
-    stream-copy across independently-stitched segments produces
-    "Non-monotonic DTS" warnings at the splice point; re-encoding (fast
-    preset, short clips) avoids that for a small time cost.
-
-    Always writes to a temp file and atomically replaces output_path --
-    required (not just nice-to-have) when output_path is also one of the
-    inputs, as it is for the append case: ffmpeg can't safely read and
-    write the same file at once, and a crash mid-encode must never leave
-    a truncated movie.mp4 visible to something already serving it."""
-    import tempfile
-
-    session_dir = os.path.dirname(output_path)
-    fd, filelist_path = tempfile.mkstemp(suffix=".txt", dir=session_dir)
-    os.close(fd)
-    tmp_output = f"{output_path}.tmp"
-    try:
-        with open(filelist_path, "w", encoding="utf-8") as f:
-            for p in input_paths:
-                f.write(f"file '{p}'\n")
-
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", filelist_path,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "aac", "-movflags", "+faststart",
-            # Explicit output format -- tmp_output's extension is ".tmp",
-            # not ".mp4" (it's renamed after success), so ffmpeg can't
-            # infer the muxer from the filename the way it can for
-            # /export's tmp-free output path. Found live: without this,
-            # ffmpeg fails with "Unable to choose an output format".
-            "-f", "mp4", tmp_output,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg concat failed: {stderr.decode(errors='replace')[-500:]}")
-        os.replace(tmp_output, output_path)
-    finally:
-        if os.path.exists(filelist_path):
-            os.remove(filelist_path)
-        if os.path.exists(tmp_output):
-            os.remove(tmp_output)
 
 
 class WorkerSettings:

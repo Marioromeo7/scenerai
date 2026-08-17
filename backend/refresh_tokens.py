@@ -47,11 +47,20 @@ async def create_refresh_token(redis: Redis, user_id: str) -> str:
 async def rotate_refresh_token(redis: Redis, token: str) -> tuple[str, str] | None:
     """Validates `token`, then atomically retires it and issues a
     replacement. Returns (user_id, new_token), or None if the token is
-    invalid/expired/already used."""
-    user_id = await redis.get(_key(token))
+    invalid/expired/already used.
+
+    GETDEL (not GET-then-DELETE) is load-bearing, not a style choice --
+    found live via code review that the previous GET/DELETE pair wasn't
+    actually atomic despite this docstring's claim: two concurrent
+    /auth/refresh calls with the same token (a client retry racing the
+    original request) could both read the still-present key before either
+    delete ran, both minting a new token from one old one. That silently
+    defeats the single-use/rotation invariant this whole module exists
+    for -- a reused refresh token is supposed to be a detectable theft
+    signal, not something that just works twice."""
+    user_id = await redis.getdel(_key(token))
     if user_id is None:
         return None
-    await redis.delete(_key(token))
     new_token = await create_refresh_token(redis, user_id)
     return user_id, new_token
 

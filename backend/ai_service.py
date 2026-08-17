@@ -60,16 +60,21 @@ async def _reserve_turn_budget(estimated_tokens: int = TURN_TOKEN_ESTIMATE):
     if not ok:
         raise RuntimeError("Groq capacity is fully booked right now — try again shortly.")
 
-# Engine models available for play
+# Engine models available for play. The entire previous roster (llama-3.1-8b-
+# instant, llama-3.3-70b-versatile, llama-3.1-70b-versatile, gemma2-9b-it,
+# mixtral-8x7b-32768) was decommissioned by Groq -- confirmed live via
+# client.models.list() against the real account, every one of those IDs is
+# gone, not just the two Groq's deprecation-notice emails named. Replaced
+# with Groq's own recommended successors, cross-checked against that same
+# live model list (openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.6-27b
+# all confirmed present and active).
 ENGINE_MODELS = {
-    "llama-3.1-8b-instant":    "LLaMA 3.1 8B — fastest",
-    "llama-3.3-70b-versatile": "LLaMA 3.3 70B — best quality",
-    "llama-3.1-70b-versatile": "LLaMA 3.1 70B — balanced",
-    "gemma2-9b-it":            "Gemma 2 9B — Google",
-    "mixtral-8x7b-32768":      "Mixtral 8x7B — large context",
+    "openai/gpt-oss-20b":  "GPT-OSS 20B — fastest",
+    "openai/gpt-oss-120b": "GPT-OSS 120B — best quality",
+    "qwen/qwen3.6-27b":    "Qwen 3.6 27B — balanced",
 }
-DEFAULT_ENGINE_MODEL = "llama-3.1-8b-instant"
-METADATA_MODEL       = "llama-3.3-70b-versatile"
+DEFAULT_ENGINE_MODEL = "openai/gpt-oss-20b"
+METADATA_MODEL       = "openai/gpt-oss-120b"
 
 _groq = Groq(api_key=settings.groq_api_key) if settings.groq_api_key else None
 
@@ -344,21 +349,50 @@ async def engine_regenerate(
 
 # ── Engine turn (streaming) ───────────────────────────────────
 
-async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_ENGINE_MODEL):
-    """Streaming version — yields tokens, then a final metadata dict."""
+async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_ENGINE_MODEL, continue_narrative=False):
+    """Streaming version — yields tokens, then a final metadata dict.
+
+    continue_narrative mirrors Engine.step()'s handling (see its docstring):
+    no player input, the narrator advances the scene on its own. Added
+    after code review found this streaming path had silently diverged from
+    Engine.step() by never supporting it at all -- /sessions/{id}/turn-stream
+    couldn't do what /sessions/{id}/continue does. Not currently wired to
+    any frontend "continue" trigger (that button calls the non-streaming
+    endpoint), but the two turn pipelines should stay capable of the same
+    things rather than drift further apart.
+    """
     await _reserve_turn_budget()
     init_client(settings.groq_api_key, engine_model)
     engine = deserialize_engine(engine_state)
 
-    player_input = sanitize_input(player_input)
-
     engine.turn += 1
     engine.metrics['turns'] += 1
-    engine.scene_lang = detect_from_player_input(player_input, engine.scene_lang)
 
-    # translate_input calls sync call() — run in thread to avoid blocking the event loop.
-    english_input = await asyncio.to_thread(translate_input, player_input, engine.scene_lang)
-    parsed = preprocess(english_input, engine.persona, engine.entities, engine.last_target)
+    if continue_narrative:
+        parsed = {
+            'clean': '(no player input — narrator continues the scene)',
+            'target': engine.last_target, 'actions': [], 'spoken': [], 'thoughts': [],
+            'same_space_risk': any(
+                e.pronouns == engine.persona.pronouns and e.present and not e.is_player
+                for e in engine.entities
+            ),
+        }
+        msg = (
+            '[SYSTEM: The player takes no action this turn. Continue the scene '
+            'naturally — advance time, deepen the moment, let other characters or '
+            f'the environment act. Do not attribute any new action, decision, or '
+            f'dialogue to {engine.persona.name}; they remain exactly as they were '
+            'left at the end of the previous turn.]'
+        )
+    else:
+        player_input = sanitize_input(player_input)
+        engine.scene_lang = detect_from_player_input(player_input, engine.scene_lang)
+        # translate_input calls sync call() — run in thread to avoid blocking the event loop.
+        english_input = await asyncio.to_thread(translate_input, player_input, engine.scene_lang)
+        parsed = preprocess(english_input, engine.persona, engine.entities, engine.last_target)
+        msg = parsed['annotated']
+        if parsed['thoughts']:
+            msg += '\n(internal context only, do not reference: ' + ' | '.join(parsed['thoughts']) + ')'
     engine.last_target = parsed['target']
 
     system = build_system(
@@ -368,15 +402,15 @@ async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_EN
         scene_lang=engine.scene_lang,
         content_filter=engine.filter,
     )
-    msg = parsed['annotated']
-    if parsed['thoughts']:
-        msg += '\n(internal context only, do not reference: ' + ' | '.join(parsed['thoughts']) + ')'
 
     engine.history.append({'role': 'user', 'content': msg})
     # display_history stores the clean input (no [SOURCE=PLAYER:...] annotation)
+    # -- skipped for continue_narrative, same as Engine.step(): there's no
+    # player message to show as a chat bubble.
     if not hasattr(engine, 'display_history'):
         engine.display_history = []
-    engine.display_history.append({'role': 'user', 'content': parsed['clean']})
+    if not continue_narrative:
+        engine.display_history.append({'role': 'user', 'content': parsed['clean']})
     previous_response = next(
         (m['content'] for m in reversed(engine.display_history[:-1]) if m.get('role') == 'assistant'),
         '',
