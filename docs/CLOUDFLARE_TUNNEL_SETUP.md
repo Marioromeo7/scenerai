@@ -1,5 +1,24 @@
 # Getting a stable public URL (named Cloudflare Tunnel)
 
+## Current interim setup: the redirect page + watchdog
+
+Until the named-tunnel steps below are done, the actual link to share is
+**https://marioromeo7.github.io/scenerai/** — a static redirect page (branch
+`gh-pages` of this repo) that always forwards to whatever the current Quick
+Tunnel URL is, plus a Windows Scheduled Task
+(`ScenaraiTunnelWatchdog`, `scripts/tunnel_watchdog.py`) that runs every 10
+minutes: if the recorded URL stops responding, it kills the stale
+`cloudflared` process, relaunches it, captures the new URL, and pushes an
+updated redirect page automatically. So the link above should always work
+without anyone manually noticing a dead tunnel and fixing it.
+
+Check on it with `schtasks /query /tn "ScenaraiTunnelWatchdog" /v /fo list`,
+or run `python scripts/tunnel_watchdog.py` by hand any time to force a check.
+This only works while this machine is on and logged in (the task runs as
+the current user) — it's a stopgap, not a real always-on server. The named
+tunnel below doesn't remove the need for this machine to be running either,
+but at least gives a permanent hostname instead of a page that redirects.
+
 ## Why
 
 The tunnel currently running (`cloudflared tunnel --url http://localhost:80`)
