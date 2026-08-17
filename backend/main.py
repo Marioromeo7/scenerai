@@ -283,13 +283,23 @@ async def get_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = 
         raise HTTPException(404, "Scenario not found")
     return ScenarioOut.model_validate(s)
 
-@app.put("/scenarios/{sid}", response_model=ScenarioOut)
-async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Depends(get_db),
-                           cu: User = Depends(get_current_user)):
+async def _get_owned_scenario(db: AsyncSession, sid: str, cu: User) -> Scenario:
+    """Fetch a scenario the requesting user owns, or 404 -- shared by every
+    route below that mutates a scenario by id (edit, delete, publish,
+    retry-prefab, unpublish). Not used by get_scenario (read access allows
+    any public+published scenario, not just owned ones) or report_scenario
+    (looks up by is_published, not ownership)."""
     s = (await db.execute(
         select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
     )).scalar_one_or_none()
     if not s: raise HTTPException(404, "Scenario not found")
+    return s
+
+
+@app.put("/scenarios/{sid}", response_model=ScenarioOut)
+async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Depends(get_db),
+                           cu: User = Depends(get_current_user)):
+    s = await _get_owned_scenario(db, sid, cu)
     if s.is_published:
         raise HTTPException(403, "Published scenarios cannot be edited")
     if body.char_name is not None: s.char_name = body.char_name
@@ -302,10 +312,7 @@ async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Dep
 
 @app.delete("/scenarios/{sid}", status_code=204)
 async def delete_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(
-        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
-    )).scalar_one_or_none()
-    if not s: raise HTTPException(404, "Scenario not found")
+    s = await _get_owned_scenario(db, sid, cu)
     if s.is_published:
         raise HTTPException(400, "Published scenarios cannot be deleted. Contact support to unpublish.")
     redis = await get_redis()
@@ -338,10 +345,7 @@ async def _enqueue_prefab_job(request: Request, db: AsyncSession, s: Scenario):
 @app.post("/scenarios/{sid}/publish", response_model=ScenarioOut)
 async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depends(get_db),
                             cu: User = Depends(get_current_user)):
-    s = (await db.execute(
-        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
-    )).scalar_one_or_none()
-    if not s: raise HTTPException(404, "Scenario not found")
+    s = await _get_owned_scenario(db, sid, cu)
     if s.is_published: raise HTTPException(400, "Scenario already published")
     s.is_published = True
     s.prefab_status = "pending"
@@ -353,10 +357,7 @@ async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depend
 @limiter.limit("5/minute")
 async def retry_prefab(sid: str, request: Request, db: AsyncSession = Depends(get_db),
                         cu: User = Depends(get_current_user)):
-    s = (await db.execute(
-        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
-    )).scalar_one_or_none()
-    if not s: raise HTTPException(404, "Scenario not found")
+    s = await _get_owned_scenario(db, sid, cu)
     if not s.is_published: raise HTTPException(400, "Scenario is not published")
     if s.prefab_status == "ready": raise HTTPException(400, "Prefab is already ready")
     s.prefab_status = "pending"
@@ -366,10 +367,7 @@ async def retry_prefab(sid: str, request: Request, db: AsyncSession = Depends(ge
 
 @app.post("/scenarios/{sid}/unpublish", response_model=ScenarioOut)
 async def unpublish_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    s = (await db.execute(
-        select(Scenario).where(Scenario.id == sid, Scenario.creator_id == cu.id)
-    )).scalar_one_or_none()
-    if not s: raise HTTPException(404, "Scenario not found")
+    s = await _get_owned_scenario(db, sid, cu)
     if not s.is_published: raise HTTPException(400, "Scenario is not published")
     s.is_published = False
     s.prefab_engine_state = None
@@ -941,9 +939,9 @@ async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWith
                     yield f"data: {json.dumps(chunk)}\n\n"
                 elif chunk.get("type") == "done":
                     redis_local = await get_redis()
-                    ctx["engine_state"] = chunk["engine_state"]
-                    ctx["history"] = (chunk["engine_state"].get("display_history")
-                                       or chunk["engine_state"].get("history", []))
+                    es = chunk["engine_state"]
+                    ctx["engine_state"] = es
+                    ctx["history"] = es.get("display_history") or es.get("history", [])
                     ctx["turn"] = chunk["turn"]
                     await redis_local.setex(f"session:{session_id}", SESSION_TTL, json.dumps(ctx))
                     await _upsert_session_log(ctx)

@@ -248,8 +248,8 @@ async def engine_init_from_prefab(
     state['filter_lock']     = False
     state['turn']            = 0
     state['metrics']         = {'turns': 0, 'sv_violations': 0, 'latencies': [], 'compressions': 0}
-    opening_msg              = (state['display_history'][0] if state['display_history']
-                                 else {'role': 'assistant', 'content': greeting})
+    dh = state['display_history']
+    opening_msg              = dh[0] if dh else {'role': 'assistant', 'content': greeting}
     state['history']         = [opening_msg]
     state['display_history'] = [opening_msg]
 
