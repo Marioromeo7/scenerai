@@ -1,23 +1,27 @@
 # Getting a stable public URL (named Cloudflare Tunnel)
 
-## Current interim setup: the redirect page + watchdog
+## Current interim setup: the redirect page (watchdog currently OFF)
 
-Until the named-tunnel steps below are done, the actual link to share is
-**https://marioromeo7.github.io/scenerai/** — a static redirect page (branch
-`gh-pages` of this repo) that always forwards to whatever the current Quick
-Tunnel URL is, plus a Windows Scheduled Task
-(`ScenaraiTunnelWatchdog`, `scripts/tunnel_watchdog.py`) that runs every 10
-minutes: if the recorded URL stops responding, it kills the stale
-`cloudflared` process, relaunches it, captures the new URL, and pushes an
-updated redirect page automatically. So the link above should always work
-without anyone manually noticing a dead tunnel and fixing it.
+The actual link to share is **https://marioromeo7.github.io/scenerai/** — a
+static redirect page (branch `gh-pages` of this repo) that forwards to
+whatever Quick Tunnel URL was last published to it. That publishing used to
+happen automatically via a Windows Scheduled Task (`ScenaraiTunnelWatchdog`,
+running `scripts/tunnel_watchdog.py` every 10 minutes) that detected a dead
+tunnel, relaunched `cloudflared`, and pushed an updated redirect page with
+the new URL — **this task was stopped and unregistered** (confirmed removed
+via `Get-ScheduledTask`), so right now the redirect page only points at
+whatever URL was live last time it ran, and nothing is auto-healing it.
 
-Check on it with `schtasks /query /tn "ScenaraiTunnelWatchdog" /v /fo list`,
-or run `python scripts/tunnel_watchdog.py` by hand any time to force a check.
-This only works while this machine is on and logged in (the task runs as
-the current user) — it's a stopgap, not a real always-on server. The named
-tunnel below doesn't remove the need for this machine to be running either,
-but at least gives a permanent hostname instead of a page that redirects.
+To re-enable: re-register the task (same `schtasks`/`Register-ScheduledTask`
+command used originally) or just run `python scripts/tunnel_watchdog.py` by
+hand periodically. The script itself is untouched and still does the right
+thing — only the schedule that was calling it automatically is gone. Doing
+so will still correctly point the redirect page at whatever new Quick
+Tunnel URL comes up, same as before. This only works while this machine is
+on and logged in either way (the task runs as the current user) — it's a
+stopgap, not a real always-on server. The named tunnel below doesn't remove
+the need for this machine to be running either, but at least gives a
+permanent hostname instead of a page that redirects.
 
 ## Why
 

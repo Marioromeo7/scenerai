@@ -7,9 +7,18 @@ categories it breaks with.
 
 ## Important caveat: rate limiting is per source IP
 
-`slowapi`'s `Limiter(key_func=get_remote_address)` in `backend/main.py` keys
-on source IP, not per-user. Every virtual client this harness spawns shares
-this machine's IP, so `register` (5/min), `login` (10/min), `create_session`
+`slowapi`'s `Limiter(key_func=get_real_client_ip)` in `backend/main.py`
+keys on source IP, not per-user (updated from the original
+`get_remote_address` -- that read nginx's own container IP for every
+request through it, effectively making every limit platform-wide instead
+of per-client; `get_real_client_ip` trusts nginx's `X-Real-IP` header when
+present, falling back to `get_remote_address` otherwise). This harness's
+own usage below (`--base-url http://localhost:9000`) hits the backend
+directly, bypassing nginx entirely, so `X-Real-IP` is never set and it
+still falls back to the raw connection IP -- meaning the caveat's practical
+effect is unchanged even though the code it was originally attributed to
+isn't. Every virtual client this harness spawns still shares this
+machine's IP, so `register` (5/min), `login` (10/min), `create_session`
 (20/min), and `turn` (60/min) limits apply to the **whole test run**, not
 per client. At even modest concurrency you will see `hard_error` (HTTP 429)
 long before any real backend capacity limit — that's an artifact of the

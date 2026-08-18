@@ -124,6 +124,13 @@ async def _poll_status(client, result, session_id, thresholds, max_wait_s=60, in
             return False
         status = resp.json().get("status")
         if status == "ready":
+            # Every poll iteration reused the same "session_status_poll" key,
+            # so latencies_ms only ever kept the LAST poll's near-instant
+            # round-trip -- the actually-interesting number (how long the
+            # user waited for the engine to become usable) was never
+            # recorded anywhere. Cheap to add, no threshold configured for
+            # it in thresholds.json so it's recorded without breach-checking.
+            result.latencies_ms["session_init_wait"] = (time.monotonic() - start) * 1000
             return True
         if status == "error":
             result.fail("silent_bad_state", "session_init_error",
@@ -224,11 +231,20 @@ async def player_flow(base_url, client_id, concurrency_at_start, thresholds, tur
                 return result
 
         resp = await _timed(result, "get_history", thresholds, client.get(f"/sessions/{session_id}/history"))
-        if resp is not None and resp.status_code == 200:
-            if resp.json().get("turns") != len(turns):
-                result.fail("silent_bad_state", "get_history",
-                             f"expected {len(turns)} persisted turns, session_log shows {resp.json().get('turns')}")
-                return result
+        # The only step in this file that didn't explicitly check a non-200
+        # status (found via code review): a 404/500 with no exception fell
+        # through this `== 200` guard silently, straight to end_session and
+        # a possible succeeded=True -- masking a real failure in exactly
+        # the check this harness exists to catch (silent_bad_state).
+        if resp is None or result.failure_category:
+            return result
+        if resp.status_code != 200:
+            result.fail("hard_error", "get_history", f"HTTP {resp.status_code}: {resp.text[:200]}")
+            return result
+        if resp.json().get("turns") != len(turns):
+            result.fail("silent_bad_state", "get_history",
+                         f"expected {len(turns)} persisted turns, session_log shows {resp.json().get('turns')}")
+            return result
 
         await _timed(result, "end_session", thresholds, client.delete(f"/sessions/{session_id}"))
         if not result.failure_category:
@@ -323,6 +339,8 @@ async def _poll_prefab(client, result, scenario_id, thresholds, max_wait_s=90, i
             return False
         status = resp.json().get("prefab_status")
         if status == "ready":
+            # Same fix as _poll_status's session_init_wait -- see there.
+            result.latencies_ms["prefab_wait"] = (time.monotonic() - start) * 1000
             return True
         if status == "failed":
             result.fail("hard_error", "prefab_missing", "prefab_status flipped to 'failed'")

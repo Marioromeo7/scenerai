@@ -46,6 +46,19 @@ its individual scores/rationale.
 
 ## Regression floor
 
+**Stale as of the Groq model migration — do not compare a fresh run against
+this table.** `llama-3.1-8b-instant`, the engine_model this floor was
+measured against, was decommissioned by Groq (see `ai_service.py`'s
+`ENGINE_MODELS` comment); the current default is `openai/gpt-oss-20b`.
+Any run from now on necessarily uses the new model, and different models
+can have systematically different baseline quality on these axes for
+reasons that have nothing to do with a real regression in engine.py/
+inference.py — comparing against a different model's floor risks reading
+model-attributable variance as a false regression (or a false pass). A
+fresh baseline run against the current default model is needed before this
+table means anything again; until then, treat scores as informative on
+their own, not as pass/fail against these specific numbers.
+
 Set from the first baseline run: `docs/eval-runs/20260805T200444Z.json`
 (engine_model=`llama-3.1-8b-instant`, judge_model=`openai/gpt-oss-120b`).
 Overall per-axis means from that run — a future run scoring below these on
