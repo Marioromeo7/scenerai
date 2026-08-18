@@ -141,4 +141,4 @@ See `.env.example` for all required variables. The most important:
 
 ---
 
-Built by Mario George — [LinkedIn](https://linkedin.com/in/REPLACE-ME) · [GitHub](https://github.com/Marioromeo7)
+Built by Mario George — [LinkedIn](https://www.linkedin.com/in/mario-hossam-mitry-george) · [GitHub](https://github.com/Marioromeo7) · [metrymarioromeo546@gmail.com](mailto:metrymarioromeo546@gmail.com)
