@@ -51,7 +51,20 @@ docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T postgres \
     psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE scenarai;"
 
 echo "Restoring from $BACKUP_FILE ..."
-gunzip -c "$BACKUP_FILE" | docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T postgres \
-    psql -U "$POSTGRES_USER" -d scenarai
+# gunzip | psql hid a gunzip failure: under plain POSIX sh (no `pipefail`),
+# a pipeline's exit status is its LAST command's -- psql reading empty
+# stdin (because gunzip choked on a corrupt/truncated backup file) just
+# exits 0 having run zero statements, so `set -e` never fires. Confirmed
+# live: `gunzip -c corrupt.gz | wc -l; echo $?` prints 0 despite gunzip's
+# own error. This script already drops the database before this point --
+# a masked failure here would report "Restore complete" over a database
+# that's been dropped and never actually repopulated. Decoupling into a
+# real intermediate file means gunzip's own exit code is what `set -e`
+# actually sees, before psql ever runs.
+TMP_SQL="$(mktemp)"
+trap 'rm -f "$TMP_SQL"' EXIT
+gunzip -c "$BACKUP_FILE" > "$TMP_SQL"
+docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T postgres \
+    psql -U "$POSTGRES_USER" -d scenarai < "$TMP_SQL"
 
 echo "Restore complete."
