@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -157,6 +158,18 @@ async def init_engine_job(
 MEDIA_ROOT = "/app/media"  # matches docker-compose.yml's worker volume mount
 
 
+def _stable_seed(*parts) -> int:
+    """Deterministic seed from (session_id, turn[, ...]) that's actually
+    reproducible across processes -- Python's built-in hash() randomizes
+    string hashing per-process by default (PEP 456, no PYTHONHASHSEED pinned
+    anywhere in this repo), so hash((session_id, turn)) produced a different
+    value every worker restart despite the "reproducible for debugging"
+    intent. sha256 has no such per-process randomization."""
+    key = ":".join(str(p) for p in parts)
+    digest = hashlib.sha256(key.encode()).digest()
+    return int.from_bytes(digest[:4], "big") % (2**31)
+
+
 async def generate_turn_media_job(
     ctx,
     session_id: str, scenario_id: str, user_id: str, turn: int,
@@ -193,7 +206,7 @@ async def generate_turn_media_job(
     # Deterministic per (session, turn) rather than random -- reproducible
     # if this job ever needs to be replayed for debugging, matches the
     # seed-determinism principle the whole image pipeline was built on.
-    seed = abs(hash((session_id, turn))) % (2**31)
+    seed = _stable_seed(session_id, turn)
     await _run_media_pipeline(session_id, turn, image_prompt, narration_text, voice_id, voice_speed, seed)
 
 
@@ -219,7 +232,7 @@ async def regenerate_turn_media_job(ctx, session_id: str, turn: int):
     # +1 rather than re-hashing -- guarantees a different seed from
     # old_seed even if the hash-based seed for (session_id, turn) would
     # otherwise repeat; simple and sufficient, doesn't need to be random.
-    new_seed = (old_seed + 1) if old_seed is not None else abs(hash((session_id, turn, "regen"))) % (2**31)
+    new_seed = (old_seed + 1) if old_seed is not None else _stable_seed(session_id, turn, "regen")
     await _run_media_pipeline(session_id, turn, image_prompt, narration_text, voice_id, voice_speed, new_seed)
 
 

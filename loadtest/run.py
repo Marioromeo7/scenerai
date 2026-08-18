@@ -81,7 +81,16 @@ async def run_baseline(base_url, n):
     print("\n[baseline] per-step latency (ms):")
     for step, vals in sorted(per_step.items()):
         p50 = statistics.median(vals)
-        p90 = vals[int(len(vals) * 0.9)] if len(vals) > 1 else vals[0]
+        # vals is built in client-submission order (appended above), not
+        # latency order -- statistics.median() sorts its own internal copy
+        # so p50 was always correct, but indexing vals directly for p90
+        # was reading position int(0.9*n) in submission order, unrelated to
+        # the actual latency distribution. Found live: a slow-early/
+        # fast-late submission order printed p90 BELOW p50, which is
+        # impossible for real percentiles of the same sample. Doesn't
+        # affect recommended[] (that's p50-only), only this printed line.
+        sorted_vals = sorted(vals)
+        p90 = sorted_vals[int(len(sorted_vals) * 0.9)] if len(sorted_vals) > 1 else sorted_vals[0]
         recommended[step] = round(p50 * 3, 1)  # plan's rule of thumb: 3x baseline p50
         print(f"  {step:28s} p50={p50:8.1f}  p90={p90:8.1f}  n={len(vals)}  -> threshold={recommended[step]}")
 

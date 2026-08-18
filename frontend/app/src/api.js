@@ -133,7 +133,11 @@ export const api = {
   saveScenario:      (id)       => request('POST',   `/scenarios/${id}/save`),
   unsaveScenario:    (id)       => request('DELETE', `/scenarios/${id}/save`),
   reportScenario:    (id, reason) => request('POST', `/scenarios/${id}/report`, { reason }),
-  getLastSession:    (id)       => request('GET',    `/scenarios/${id}/last-session`),
+  // persona_id is required -- must match create_session's own persona-scoped
+  // resume query, or this can show a different persona's conversation
+  // glued onto a freshly-initialized engine that has no memory of it.
+  getLastSession:    (id, personaId) =>
+                     request('GET', `/scenarios/${id}/last-session?persona_id=${encodeURIComponent(personaId)}`),
 
   // Sessions
   createSession:     (scenario_id, persona_id, content_filter = 'off', preview = false) =>

@@ -54,6 +54,18 @@ class Entity:
             lines.append(f'    Physical state : {self.physical_state}')
         if self.saved_assumptions:
             lines.append(f'    Saved details  : {", ".join(self.saved_assumptions)}')
+        if self.shy and not self.is_player:
+            # ContentFilter.activate() sets this on every NPC when the filter
+            # turns on, but nothing previously read it -- the flag existed,
+            # got set/cleared correctly, and had its own passing tests, but
+            # had zero effect on the actual narrator output: the only
+            # content-filter signal reaching the LLM was the generic
+            # top-level prompt_block() text, never anything per-character.
+            # Reinforces that same already-established policy per-NPC rather
+            # than introducing new wording. Skipped for the player: the
+            # narrator must never direct the player's behavior at all
+            # (see the sovereignty rule above), modest or otherwise.
+            lines.append('    Content filter : Behaves modestly — does not initiate or escalate explicit content.')
         if full:
             lines.append(f'    Mood           : {self.mood}')
             lines.append(f'    Location       : {self.location}')
@@ -117,12 +129,22 @@ class ContentFilter:
         return self.state != FilterState.OFF
 
     def activate(self, entities):
-        self.state = FilterState.ON
+        # Only promotes OFF -> ON. Previously unconditional, which meant a
+        # FORCE filter got silently downgraded to a plain ON the moment a
+        # session started (Engine.__init__ calls activate() whenever
+        # is_active, i.e. for ON and FORCE alike) -- "force" and "on" became
+        # indistinguishable from turn one, even though prompt_block() and
+        # deactivate() both still treat FORCE as the stronger tier.
+        if self.state == FilterState.OFF:
+            self.state = FilterState.ON
         for e in entities:
             e.shy = True
 
     def deactivate(self, entities):
-        if self.parental_lock:
+        # FORCE is a locked tier by definition, independent of parental_lock
+        # (which nothing in the live app currently sets to True) -- without
+        # this, FORCE had no enforcement path of its own at all.
+        if self.parental_lock or self.state == FilterState.FORCE:
             return False
         self.state = FilterState.OFF
         for e in entities:

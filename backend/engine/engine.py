@@ -115,14 +115,21 @@ class Engine:
                 content_filter=self.filter,
             )
 
+            # Computed BEFORE this turn's append(s) below: on a continue_narrative
+            # turn nothing gets appended to display_history (no player message to
+            # show), so display_history's last item is already the actual previous
+            # response -- slicing it off (as the normal-turn path needs to, to skip
+            # the user message it's about to append) would silently point this at
+            # the wrong turn. Computing it first works for both branches uniformly.
+            previous_response = next(
+                (m['content'] for m in reversed(self.display_history) if m.get('role') == 'assistant'),
+                '',
+            )
+
             self.history.append({'role': 'user', 'content': msg})
             if not continue_narrative:
                 self.display_history.append({'role': 'user', 'content': parsed['clean']})
             hot = self.history[-MAX_RAW_TURNS:]
-            previous_response = next(
-                (m['content'] for m in reversed(self.display_history[:-1]) if m.get('role') == 'assistant'),
-                '',
-            )
 
             response_en, latency = call(system, hot)
             response             = translate_output(response_en, self.scene_lang)

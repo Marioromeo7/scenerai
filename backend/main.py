@@ -447,25 +447,47 @@ async def save_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User =
 
 @app.delete("/scenarios/{sid}/save", status_code=204)
 async def unsave_scenario(sid: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
-    sv = (await db.execute(
-        select(ScenarioSave).where(ScenarioSave.user_id == cu.id, ScenarioSave.scenario_id == sid)
-    )).scalar_one_or_none()
-    if sv:
-        await db.delete(sv)
+    # Bulk DELETE + rowcount, not select-then-ORM-delete: two concurrent
+    # unsaves (double-click, two tabs) both loading the row before either
+    # commits would otherwise both see it as present and both run the
+    # saves_count decrement below -- one logical unsave, counted twice.
+    # A rowcount-gated bulk DELETE only lets the request that actually
+    # removed a row touch the counter, mirroring save_scenario's
+    # IntegrityError-based idempotency for the same race shape.
+    result = await db.execute(
+        delete(ScenarioSave).where(ScenarioSave.user_id == cu.id, ScenarioSave.scenario_id == sid)
+    )
+    if result.rowcount:
         await db.execute(
             update(Scenario).where(Scenario.id == sid)
             .values(saves_count=func.greatest(Scenario.saves_count - 1, 0))
         )
-        await db.commit()
+    await db.commit()
 
 
 # ── Sessions ──────────────────────────────────────────────────
 
 @app.get("/scenarios/{scenario_id}/last-session")
-async def get_last_session(scenario_id: str, db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+async def get_last_session(scenario_id: str, persona_id: str,
+                            db: AsyncSession = Depends(get_db), cu: User = Depends(get_current_user)):
+    """persona_id is required and must match create_session's own resume
+    query (below) exactly -- found live via code review that this used to
+    be persona-agnostic while create_session's actual resume was always
+    persona-scoped. The frontend renders this endpoint's history as the
+    visible chat transcript immediately, before the engine finishes
+    initializing; a mismatch meant a user switching personas on a
+    previously-played scenario would see a prior persona's conversation
+    glued onto a freshly-initialized engine that had no memory of it.
+    engine_state.isnot(None) is included for the same reason -- a row this
+    endpoint shows must be one create_session could actually resume from."""
     r = await db.execute(
         select(SessionLog)
-        .where(SessionLog.user_id == cu.id, SessionLog.scenario_id == scenario_id)
+        .where(
+            SessionLog.user_id == cu.id,
+            SessionLog.scenario_id == scenario_id,
+            SessionLog.persona_id == persona_id,
+            SessionLog.engine_state.isnot(None),
+        )
         .order_by(SessionLog.started_at.desc()).limit(1)
     )
     log = r.scalar_one_or_none()

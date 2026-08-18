@@ -27,6 +27,7 @@ reliable (75-85%). Collective entities get routed to a crowd descriptor
 instead of an attempted individual likeness.
 """
 import logging
+import re
 from .call import call
 from .types import Entity
 
@@ -53,6 +54,9 @@ _CLOTHING_KEYWORDS = (
     'clothing', 'clothed', 'outfit', 'garment',
 )
 DEFAULT_CLOTHING_TAG = "modest clothing, fully clothed"
+_CLOTHING_KEYWORD_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(kw) for kw in _CLOTHING_KEYWORDS) + r')\b'
+)
 
 _DISTILL_SYSTEM = (
     "You compress a character's physical description into short, comma-separated "
@@ -92,12 +96,22 @@ def get_visual_tags(entity: Entity) -> str:
 def _ensure_clothing(tags: str) -> str:
     """Guarantees SOME clothing descriptor is present -- see
     DEFAULT_CLOTHING_TAG's docstring for why this exists at all. A
-    substring check, not exact matching -- deliberately generous (catches
-    "cloak" inside "dark green cloak") since a false positive (skipping
-    the default when clothing actually was mentioned) is harmless, while
-    a false negative (leaving clothing genuinely unconstrained) is the
-    exact failure this fix targets."""
-    if any(kw in tags.lower() for kw in _CLOTHING_KEYWORDS):
+    word-boundary match, not exact matching -- deliberately generous
+    (catches "cloak" inside "dark green cloak") since a false positive
+    (skipping the default when clothing actually was mentioned) is
+    harmless, while a false negative (leaving clothing genuinely
+    unconstrained) is the exact failure this fix targets.
+
+    Word-boundary, not plain substring: a plain `kw in tags` check matches
+    "clothed" inside "unclothed", "dress" inside "undressed", "shirt"
+    inside "shirtless", and "robe" inside "disrobe"/"disrobed" -- all
+    confirmed live. Every one of those is a false POSITIVE that defeats
+    the whole point: a distilled tag string containing "unclothed" would
+    be read as "clothing already mentioned" and passed through unchanged,
+    skipping DEFAULT_CLOTHING_TAG entirely and leaving the literal
+    negation word sitting in the positive SD1.5 prompt -- actively
+    pushing toward the exact output NEGATIVE_PROMPT exists to fight."""
+    if _CLOTHING_KEYWORD_RE.search(tags.lower()):
         return tags
     return f"{tags}, {DEFAULT_CLOTHING_TAG}" if tags else DEFAULT_CLOTHING_TAG
 

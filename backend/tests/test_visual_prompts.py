@@ -44,6 +44,27 @@ class TestEnsureClothing:
     def test_case_insensitive_and_substring_match(self):
         assert _ensure_clothing("wearing a CLOAK") == "wearing a CLOAK"
 
+    def test_regression_unclothed_does_not_false_positive_as_clothed(self):
+        """Before the word-boundary fix, a plain substring check saw
+        "clothed" inside "unclothed" and treated it as clothing already
+        being mentioned, skipping DEFAULT_CLOTHING_TAG entirely -- leaving
+        "unclothed" alone in the positive SD1.5 prompt instead of being
+        counterbalanced. Confirmed live: 'clothed' in 'unclothed' is True."""
+        result = _ensure_clothing('unclothed, silver hair')
+        assert DEFAULT_CLOTHING_TAG in result
+
+    def test_regression_undressed_does_not_false_positive_as_dress(self):
+        result = _ensure_clothing('undressed, tall build')
+        assert DEFAULT_CLOTHING_TAG in result
+
+    def test_regression_shirtless_does_not_false_positive_as_shirt(self):
+        result = _ensure_clothing('shirtless, scarred forearm')
+        assert DEFAULT_CLOTHING_TAG in result
+
+    def test_regression_disrobe_does_not_false_positive_as_robe(self):
+        result = _ensure_clothing('mid-disrobe, silver hair')
+        assert DEFAULT_CLOTHING_TAG in result
+
 
 class TestGetVisualTags:
     def test_distills_and_caches(self):

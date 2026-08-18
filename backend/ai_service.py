@@ -403,27 +403,34 @@ async def engine_step_stream(engine_state, player_input, engine_model=DEFAULT_EN
         content_filter=engine.filter,
     )
 
+    if not hasattr(engine, 'display_history'):
+        engine.display_history = []
+    # Computed BEFORE this turn's append(s) below -- see the matching comment
+    # in Engine.step(). continue_narrative never appends a user turn, so
+    # display_history's last item is already the real previous response;
+    # slicing it off (needed only on the normal-turn path, to skip the user
+    # message about to be appended) would point this at the wrong turn.
+    previous_response = next(
+        (m['content'] for m in reversed(engine.display_history) if m.get('role') == 'assistant'),
+        '',
+    )
+
     engine.history.append({'role': 'user', 'content': msg})
     # display_history stores the clean input (no [SOURCE=PLAYER:...] annotation)
     # -- skipped for continue_narrative, same as Engine.step(): there's no
     # player message to show as a chat bubble.
-    if not hasattr(engine, 'display_history'):
-        engine.display_history = []
     if not continue_narrative:
         engine.display_history.append({'role': 'user', 'content': parsed['clean']})
-    previous_response = next(
-        (m['content'] for m in reversed(engine.display_history[:-1]) if m.get('role') == 'assistant'),
-        '',
-    )
 
     hot = engine.history[-MAX_RAW_TURNS:]
 
+    # async_stream_call no longer signals failure via a None sentinel (see its
+    # docstring) -- a Groq failure now raises normally and propagates out of
+    # this async generator to play_turn_stream's event_generator, which turns
+    # it into a "type": "error" SSE event instead of a silently blank turn.
     response_en = ""
     async for token in async_stream_call(system, hot):
-        if token is not None:
-            response_en += token
-        else:
-            break
+        response_en += token
 
     # translate_output calls sync call() — run in thread.
     response = await asyncio.to_thread(translate_output, response_en, engine.scene_lang)

@@ -88,6 +88,28 @@ class TestContinueNarrative:
 
         assert e.last_target == 'Iris'
 
+    def test_continuation_passes_actual_previous_response_to_guard(self):
+        """Regression: previous_response used to be computed from
+        display_history[:-1], which is only correct on the normal-turn path
+        (where a user message was just appended and needs skipping).
+        continue_narrative never appends a user message, so the slice
+        stripped off the real previous response instead and guard_response's
+        anti-repeat check silently compared against the wrong (or no) turn."""
+        e = _build_engine()
+        shared = MagicMock(side_effect=[
+            ('Iris turns the page slowly, saying nothing.', 0.5),  # main response
+            (SOVEREIGN, 0.1),  # step's own hard-block check_sovereignty
+            (EXTRACT, 0.1),    # extract_and_save_assumptions
+        ])
+        with patch('engine.engine.call', shared), patch('engine.inference.call', shared), \
+             patch('engine.engine.guard_response') as mock_guard:
+            mock_guard.return_value = (
+                'Iris turns the page slowly, saying nothing.', {'revised': False, 'violations': []}
+            )
+            e.step('', continue_narrative=True)
+
+        assert mock_guard.call_args.kwargs['previous_response'] == 'Iris waits at the door.'
+
     def test_normal_turn_still_wraps_as_source_player(self):
         """Sanity check the existing path is unchanged by the new branch."""
         e = _build_engine()

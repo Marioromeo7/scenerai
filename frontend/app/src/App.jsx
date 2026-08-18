@@ -430,11 +430,26 @@ function MoviePlayer({ turnMedia, messages, muted, charName, sessionId, movieInf
   const [exporting, setExporting]   = useState(false)
   const [exportResult, setExportResult] = useState(null)
   const [exportError, setExportError]   = useState(null)
+  // Tracks the value we last auto-set exportTo to, so we can tell "still
+  // following the latest scene" apart from "user manually picked an
+  // earlier turn." Without this, exportTo only ever got set once (guarded
+  // by exportFrom === '') and silently stopped tracking new scenes as more
+  // turns finished rendering -- not wrong data, but a default that looked
+  // live and quietly went stale, with no reselect prompt to notice by.
+  const lastAutoExportTo = useRef(null)
 
   useEffect(() => {
-    if (ready.length > 0 && exportFrom === '') {
+    if (ready.length === 0) return
+    const latestTurn = String(ready[ready.length - 1].turn)
+    if (exportFrom === '') {
       setExportFrom(String(ready[0].turn))
-      setExportTo(String(ready[ready.length - 1].turn))
+      setExportTo(latestTurn)
+      lastAutoExportTo.current = latestTurn
+    } else if (exportTo === lastAutoExportTo.current && exportTo !== latestTurn) {
+      // Still following our own last auto-set value -- the user hasn't
+      // manually overridden it, so keep it pinned to the latest scene.
+      setExportTo(latestTurn)
+      lastAutoExportTo.current = latestTurn
     }
   }, [ready.length])
 
@@ -573,6 +588,13 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   // mid-response can cancel it instead of leaving an orphaned reader loop
   // running against an unmounted view.
   const streamAbortRef = useRef(null)
+  // Same double-click/double-Enter race as sendingRef above, for the two
+  // other turn-advancing actions -- `loading`/`regenerating` are React state
+  // and don't update synchronously, so a fast double-click on Continue or
+  // Regenerate can pass the guard twice before the first click's setState commits.
+  const continueRef = useRef(false)
+  const regenerateRef = useRef(false)
+  const regenerateMediaRef = useRef(false)
 
   function toggleMuted() {
     setMuted(m => {
@@ -583,6 +605,8 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
 
   async function regenerateMedia(turn) {
     if (!sessionId || regeneratingMediaTurn) return
+    if (regenerateMediaRef.current) return
+    regenerateMediaRef.current = true
     setRegeneratingMediaTurn(turn)
     setTurnMedia(prev => ({ ...prev, [turn]: { ...prev[turn], status:'pending' } }))
     try {
@@ -591,6 +615,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
       logError(err)
       setTurnMedia(prev => ({ ...prev, [turn]: { ...prev[turn], status:'failed', error: err.message } }))
     } finally {
+      regenerateMediaRef.current = false
       setRegeneratingMediaTurn(null)
     }
   }
@@ -606,7 +631,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
 
     // Load previous history only for non-preview sessions
     if (!preview) {
-      api.getLastSession(scenario.id)
+      api.getLastSession(scenario.id, persona.id)
         .then(last => {
           if (last?.history?.length > 0) {
             // Best-effort turn numbering for resumed history: getLastSession
@@ -770,6 +795,8 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   // endpoint, same shape as the non-streaming /turn.
   async function continueStory() {
     if (!sessionId || loading || regenerating || !engineReady) return
+    if (continueRef.current) return
+    continueRef.current = true
     setLoading(true)
     try {
       const data = await api.continueTurn(sessionId, engineModel)
@@ -781,6 +808,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     } catch (err) {
       setMessages(m => [...m, { role:'error', content:err.message }])
     } finally {
+      continueRef.current = false
       setLoading(false)
     }
   }
@@ -789,6 +817,8 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   // last message in place, does not append a new one.
   async function regenerateStory() {
     if (!sessionId || loading || regenerating || !engineReady) return
+    if (regenerateRef.current) return
+    regenerateRef.current = true
     setRegenerating(true)
     try {
       const data = await api.regenerateTurn(sessionId, engineModel)
@@ -807,6 +837,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     } catch (err) {
       setMessages(m => [...m, { role:'error', content:err.message }])
     } finally {
+      regenerateRef.current = false
       setRegenerating(false)
     }
   }
@@ -1135,6 +1166,13 @@ function App() {
   const [scenarioCursor, setScenarioCursor] = useState(null)
   const [scenarioHasMore, setScenarioHasMore] = useState(false)
   const [extraScenarios, setExtraScenarios] = useState([])  // paginated pages 2+
+  const [scenarioLoadingMore, setScenarioLoadingMore] = useState(false)
+  // Synchronous re-entry guard for the "Load more" button below -- same
+  // shape as sendingRef (React state doesn't update synchronously, so a
+  // fast double-click can pass a state-only guard twice). Found live via
+  // code review: unlike BrowseTab's/HistoryTab's own "Load more" buttons,
+  // this one had no guard of any kind, not even a disabled state.
+  const scenarioLoadingMoreRef = useRef(false)
   const [savedIds,      setSavedIds]      = useState(new Set())
   const [activePersona, setActivePersona] = useState(null)
   const [playScenario,  setPlayScenario]  = useState(null)
@@ -1338,9 +1376,28 @@ function App() {
     finally { setGenerating(false) }
   }
 
+  // qc.invalidateQueries only refetches page 1 (['scenarios'] is always
+  // queried with no cursor, see the queryFn below) -- an item the user
+  // reached via "Load more" lives in extraScenarios instead, which nothing
+  // but deleteScenario ever patches. Found live via code review: publish/
+  // unpublish/edit all ended with only the invalidate call, so a mutation
+  // on a page-2+ scenario silently never reflected in its card, even across
+  // the 15s poll (which also only re-reads page 1). Re-fetching the single
+  // fresh record (rather than hand-guessing which fields the mutation
+  // changed) keeps this correct regardless of what publish/unpublish/edit
+  // touch server-side now or later.
+  async function syncExtraScenario(id) {
+    if (!extraScenarios.some(s => s.id === id)) return
+    try {
+      const fresh = await api.getScenario(id)
+      setExtraScenarios(prev => prev.map(s => s.id === id ? fresh : s))
+    } catch (err) { logError(err) }
+  }
+
   async function publishScenario(id) {
     try {
       await api.publishScenario(id)
+      await syncExtraScenario(id)
       qc.invalidateQueries({ queryKey: ['scenarios'] })
     } catch(err) { showError(err) }
   }
@@ -1349,6 +1406,7 @@ function App() {
     if (!confirm('Unpublish this scenario? It will no longer be visible to other players.')) return
     try {
       await api.unpublishScenario(id)
+      await syncExtraScenario(id)
       qc.invalidateQueries({ queryKey: ['scenarios'] })
     } catch(err) { showError(err) }
   }
@@ -1374,13 +1432,15 @@ function App() {
 
   async function saveScenarioEdit() {
     if (!sCharName||!sTitle||!sPersonality||!sOpening) { alert('Fill in all fields'); return }
+    const id = editingScenario
     setGenerating(true)
     try {
-      await api.updateScenario(editingScenario, {
+      await api.updateScenario(id, {
         char_name: sCharName, char_pronouns: sCharPronouns,
         char_title: sTitle, char_personality: sPersonality,
         greeting: sOpening,
       })
+      await syncExtraScenario(id)
       setEditingScenario(null)
       setSCharName(''); setSTitle(''); setSPersonality(''); setSOpening('')
       setActiveTab('persona')
@@ -1773,16 +1833,24 @@ function App() {
           {scenarioHasMore && (
             <button
               className="load-more-btn"
+              disabled={scenarioLoadingMore}
               onClick={async () => {
+                if (scenarioLoadingMoreRef.current) return
+                scenarioLoadingMoreRef.current = true
+                setScenarioLoadingMore(true)
                 try {
                   const res = await api.listScenarios(scenarioCursor)
                   setExtraScenarios(prev => [...prev, ...(res.items||[])])
                   setScenarioCursor(res.next_cursor)
                   setScenarioHasMore(res.has_more)
                 } catch(e) { logError(e) }
+                finally {
+                  scenarioLoadingMoreRef.current = false
+                  setScenarioLoadingMore(false)
+                }
               }}
             >
-              Load more
+              {scenarioLoadingMore ? 'Loading…' : 'Load more'}
             </button>
           )}
         </div>

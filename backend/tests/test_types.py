@@ -44,6 +44,25 @@ class TestEntity:
         e = Entity(name='Iris', pronouns='she/her', emotional_state='guarded')
         assert 'guarded' in e.block()
 
+    def test_block_shy_npc_notes_content_filter(self):
+        """Regression: e.shy was set/cleared by ContentFilter.activate()/
+        deactivate() and had its own passing tests, but nothing ever read
+        it -- it had zero effect on the narrator's actual output."""
+        e = Entity(name='Iris', pronouns='she/her', shy=True)
+        assert 'Content filter' in e.block()
+
+    def test_block_shy_player_has_no_content_filter_note(self):
+        """The narrator must never direct the player's behavior at all --
+        modest or otherwise -- so this must stay silent for is_player=True
+        even when shy is set (activate() sets shy on every entity, player
+        included)."""
+        e = Entity(name='Alex', pronouns='they/them', is_player=True, shy=True)
+        assert 'Content filter' not in e.block()
+
+    def test_block_not_shy_has_no_content_filter_note(self):
+        e = Entity(name='Iris', pronouns='she/her', shy=False)
+        assert 'Content filter' not in e.block()
+
     def test_block_history_shows_last_three(self):
         e = Entity(name='Iris', pronouns='she/her',
                    history=[f'event {i}' for i in range(6)])
@@ -145,6 +164,28 @@ class TestContentFilter:
 
     def test_deactivate_blocked_by_parental_lock(self):
         f = ContentFilter(state=FilterState.ON, parental_lock=True)
+        entities = [Entity(name='A', pronouns='they/them', shy=True)]
+        result = f.deactivate(entities)
+        assert result is False
+        assert f.is_active
+        assert entities[0].shy
+
+    def test_activate_preserves_force_state(self):
+        """Regression: activate() used to unconditionally set state=ON, which
+        silently downgraded FORCE to ON the moment a session started (Engine.
+        __init__ calls activate() for any active filter, FORCE included) --
+        making "force" indistinguishable from "on" from turn one."""
+        f = ContentFilter(state=FilterState.FORCE)
+        entities = [Entity(name='A', pronouns='they/them')]
+        f.activate(entities)
+        assert f.state == FilterState.FORCE
+        assert entities[0].shy
+
+    def test_deactivate_blocked_by_force_state_alone(self):
+        """FORCE must block deactivation even without parental_lock set --
+        nothing in the live app currently sets parental_lock=True, so without
+        this FORCE had no enforcement mechanism of its own at all."""
+        f = ContentFilter(state=FilterState.FORCE, parental_lock=False)
         entities = [Entity(name='A', pronouns='they/them', shy=True)]
         result = f.deactivate(entities)
         assert result is False
