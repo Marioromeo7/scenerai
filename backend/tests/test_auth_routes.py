@@ -188,3 +188,73 @@ class TestDeleteAccount:
 
         db.delete.assert_awaited_once_with(user)
         db.commit.assert_awaited_once()
+
+
+class TestRefresh:
+    @pytest.mark.asyncio
+    async def test_401_when_refresh_token_invalid_or_expired(self):
+        db = _mock_db()
+        request = MagicMock()
+        from schemas import RefreshRequest
+        body = RefreshRequest(refresh_token='bad-token')
+
+        with patch('main.get_redis', new=AsyncMock(return_value=MagicMock())), \
+             patch('main.rotate_refresh_token', new=AsyncMock(return_value=None)):
+            with pytest.raises(HTTPException) as exc_info:
+                await main.refresh.__wrapped__(request, body, db=db)
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_401_when_rotated_token_points_to_a_deleted_user(self):
+        """The refresh token was valid (rotate succeeded), but the user it
+        points to no longer exists (account deleted) -- must not mint a
+        token for a nonexistent user."""
+        db = _mock_db(scalar_result=None)
+        request = MagicMock()
+        from schemas import RefreshRequest
+        body = RefreshRequest(refresh_token='old-token')
+
+        with patch('main.get_redis', new=AsyncMock(return_value=MagicMock())), \
+             patch('main.rotate_refresh_token', new=AsyncMock(return_value=('deleted-user-id', 'new-token'))):
+            with pytest.raises(HTTPException) as exc_info:
+                await main.refresh.__wrapped__(request, body, db=db)
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_returns_new_access_token_and_rotated_refresh_token(self):
+        user = _user(id='u1')
+        db = _mock_db(scalar_result=user)
+        request = MagicMock()
+        from schemas import RefreshRequest
+        body = RefreshRequest(refresh_token='old-token')
+
+        with patch('main.get_redis', new=AsyncMock(return_value=MagicMock())), \
+             patch('main.rotate_refresh_token', new=AsyncMock(return_value=('u1', 'brand-new-refresh-token'))), \
+             patch('main.create_token', return_value='brand-new-access-token'):
+            result = await main.refresh.__wrapped__(request, body, db=db)
+
+        assert result.access_token == 'brand-new-access-token'
+        assert result.refresh_token == 'brand-new-refresh-token'
+
+
+class TestLogout:
+    @pytest.mark.asyncio
+    async def test_revokes_the_refresh_token(self):
+        from schemas import LogoutRequest
+        body = LogoutRequest(refresh_token='some-token')
+
+        with patch('main.get_redis', new=AsyncMock(return_value=MagicMock())), \
+             patch('main.revoke_refresh_token', new=AsyncMock()) as mock_revoke:
+            await main.logout(body)
+
+        mock_revoke.assert_awaited_once()
+        assert mock_revoke.await_args.args[1] == 'some-token'
+
+
+class TestMe:
+    @pytest.mark.asyncio
+    async def test_returns_the_requesting_user(self):
+        user = _user(id='u1', email='me@example.com')
+        result = await main.me(cu=user)
+        assert result.id == 'u1'
+        assert result.email == 'me@example.com'

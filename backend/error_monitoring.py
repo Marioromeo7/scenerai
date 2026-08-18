@@ -35,7 +35,27 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
         t0 = time.monotonic()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # BaseHTTPMiddleware's call_next() re-raises here rather than
+            # returning a response -- a generic-Exception handler (like
+            # unhandled_exception_handler below) runs in Starlette's
+            # ServerErrorMiddleware, which sits ABOVE this middleware in
+            # the stack, so the code after call_next() never ran for any
+            # 500. Confirmed live with an isolated repro: the X-Request-ID
+            # response header AND this completion/latency log line were
+            # both silently skipped for every unhandled exception -- the
+            # one case this middleware most exists for ("so a user-reported
+            # error can actually be traced back to its exact log lines").
+            # Log the failed request here, then re-raise unchanged so
+            # ServerErrorMiddleware's own handling is untouched.
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            logger.info(
+                "[req %s] %s %s -> ERROR (%sms)",
+                request_id, request.method, request.url.path, latency_ms,
+            )
+            raise
         response.headers["X-Request-ID"] = request_id
         latency_ms = round((time.monotonic() - t0) * 1000, 1)
         logger.info(
@@ -57,7 +77,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     #   import sentry_sdk
     #   sentry_sdk.capture_exception(exc)
 
+    # Set directly on this response, not left to RequestIDMiddleware's
+    # post-call_next() code -- that code never runs for an exception this
+    # handler is catching (see RequestIDMiddleware's docstring above).
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error.", "request_id": request_id},
+        headers={"X-Request-ID": request_id},
     )
