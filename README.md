@@ -138,3 +138,7 @@ See `.env.example` for all required variables. The most important:
 - [ ] Remove exposed `5432` and `6379` ports from `docker-compose.yml`
 - [ ] Add HTTPS (Caddy, Certbot, or cloud load balancer in front of nginx)
 - [ ] Set `CORS_ORIGINS` to your actual domain
+
+---
+
+Built by Mario George — [LinkedIn](https://linkedin.com/in/REPLACE-ME) · [GitHub](https://github.com/Marioromeo7)
