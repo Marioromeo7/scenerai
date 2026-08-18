@@ -1,5 +1,8 @@
+import logging
 from pydantic_settings import BaseSettings
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -53,3 +56,35 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _warn_on_weak_defaults(s: "Settings") -> None:
+    """These fallback values exist so the app doesn't crash at import time
+    when running outside Docker without a .env (e.g. a one-off script) --
+    but a silent fallback to a publicly-known secret is exactly the wrong
+    failure mode if .env is ever actually missing in a real deployment
+    (fresh clone, CI, a misconfigured host): the app would start up fine,
+    look healthy, and sign every JWT with a secret anyone can read in this
+    file. A loud startup warning, not a hard crash -- this module doesn't
+    know whether it's being imported for local dev/testing (where these
+    fallbacks are genuinely fine) or a real deployment, so failing hard
+    here risked breaking a legitimate workflow this review didn't have
+    visibility into."""
+    if s.jwt_secret == "dev_secret":
+        logger.warning(
+            "SECURITY: JWT_SECRET is not set (or is the default) -- signing tokens with a "
+            "publicly-known secret. Set JWT_SECRET in .env before this reaches anyone but you."
+        )
+    if ":changeme@" in s.database_url:
+        logger.warning(
+            "SECURITY: POSTGRES password is not set (or is the default \"changeme\"). "
+            "Set it in .env before this reaches anyone but you."
+        )
+    if s.redis_url == "redis://localhost:6379/0":
+        logger.warning(
+            "SECURITY: REDIS_URL has no password configured. "
+            "Set it in .env before this reaches anyone but you."
+        )
+
+
+_warn_on_weak_defaults(settings)

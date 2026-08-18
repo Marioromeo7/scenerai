@@ -45,7 +45,7 @@ from schemas import (
     PasswordChange, ScenarioReport,
     SubscriptionTierOut, UserSubscriptionOut, TelemetryOut,
 )
-from auth import hash_password, verify_password, create_token, get_current_user, require_admin
+from auth import hash_password, verify_password, create_token, get_current_user, require_admin, _DUMMY_PASSWORD_HASH
 from user_rate_limit import enforce_user_rate_limit
 from refresh_tokens import create_refresh_token, rotate_refresh_token, revoke_refresh_token
 from error_monitoring import RequestIDMiddleware, unhandled_exception_handler
@@ -133,7 +133,12 @@ async def register(request: Request, body: UserCreate, db: AsyncSession = Depend
 @limiter.limit("10/minute")
 async def login(request: Request, body: UserLogin, db: AsyncSession = Depends(get_db)):
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
-    if not u or not verify_password(body.password, u.hashed_password):
+    # verify_password always runs, even when u is None (against a dummy hash) --
+    # see auth._DUMMY_PASSWORD_HASH's docstring. `and` here, not the original
+    # short-circuiting `or not u or not verify_password(...)`, specifically so
+    # Python can't skip the bcrypt call when u is None.
+    password_ok = verify_password(body.password, u.hashed_password if u else _DUMMY_PASSWORD_HASH)
+    if not u or not password_ok:
         raise HTTPException(401, "Invalid credentials")
     redis = await get_redis()
     refresh_token = await create_refresh_token(redis, u.id)

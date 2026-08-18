@@ -6,18 +6,21 @@ retries) — but nothing stops multiple concurrent requests from all firing
 at once, all exceeding the budget together, and all retrying in lockstep
 (the thundering-herd pattern found during Section 3 load testing).
 
-Real measured limit: 6000 TPM on llama-3.1-8b-instant (free/dev tier) —
-found via live load testing, not assumed from docs. At ~1500-4000 tokens
-per player turn (system prompt + history + response + guard call), that
-ceiling is roughly 1-4 turns/minute across the ENTIRE platform on this
-tier, not per user — see SESSION_SUMMARY.md.
-
-llama-3.1-8b-instant itself was decommissioned by Groq (see ai_service.py's
-ENGINE_MODELS comment) and DEFAULT_ENGINE_MODEL is now openai/gpt-oss-20b --
-TPM_LIMIT below is NOT re-verified against the new model's actual limit,
-which Groq may set differently per-model. Left as the last real
-measurement rather than a guessed number; re-measure via load testing
-before trusting this figure for capacity planning.
+Re-measured live (2026-08-18) against the current model roster, after
+llama-3.1-8b-instant (the model the original 6000 TPM figure was measured
+against) was decommissioned by Groq -- see ai_service.py's ENGINE_MODELS
+comment. Read directly from Groq's own x-ratelimit-limit-tokens response
+header (client.chat.completions.with_raw_response.create(...).headers),
+not inferred from a 429 or re-run through the load-test harness -- that
+harness measures backend concurrency breakpoints, a different and much
+slower thing than reading the number Groq already reports on every
+response. Checked all three models in ENGINE_MODELS individually (not
+assumed to share a limit): openai/gpt-oss-20b, openai/gpt-oss-120b, and
+qwen/qwen3.6-27b all report the identical 8000 TPM on this account tier,
+so one shared TPM_LIMIT across all of them is still the right design, just
+with the current real number. At ~1500-4000 tokens per player turn (system
+prompt + history + response + guard call), that's roughly 2-5 turns/minute
+across the ENTIRE platform on this tier, not per user.
 
 Design: a Redis-backed sliding-window counter, same incr+expire pattern
 already used for worker.py's PREFAB_JOB_KEY concurrency gate. Callers
@@ -33,7 +36,7 @@ the running stack.
 import asyncio
 import time
 
-TPM_LIMIT = 6000  # measured via load testing — see SESSION_SUMMARY.md
+TPM_LIMIT = 8000  # re-measured live 2026-08-18 via Groq's x-ratelimit-limit-tokens header
 WINDOW_KEY = "groq_tpm_window"
 WINDOW_SECONDS = 60
 POLL_INTERVAL = 0.5

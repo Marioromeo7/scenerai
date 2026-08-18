@@ -26,6 +26,17 @@ def hash_password(p: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
+# Computed once at import, not per-request -- a real bcrypt hash to check
+# a login attempt against when the email doesn't exist, so that path costs
+# the same ~200ms as a real wrong-password check instead of returning
+# near-instantly. Found live via code review, then measured: skipping
+# verify_password entirely on a nonexistent email (the original short-
+# circuit `not u or not verify_password(...)`) created a ~236ms timing gap
+# between "no such account" and "wrong password" for the same generic 401 --
+# trivially measurable, and enough to enumerate registered emails by timing
+# alone despite both cases returning identical response bodies.
+_DUMMY_PASSWORD_HASH = hash_password("not-a-real-account-constant-time-padding")
+
 def create_token(user_id):
     exp = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
     return jwt.encode({"sub": user_id, "exp": exp}, settings.jwt_secret, algorithm=settings.jwt_algorithm)

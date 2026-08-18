@@ -63,8 +63,8 @@ class TestReserveTokenBudget:
 
     @pytest.mark.asyncio
     async def test_compensates_and_waits_when_over_budget_then_succeeds(self):
-        # first attempt overshoots (6500 > 6000), second attempt fits
-        redis = _mock_redis(incrby_side_effect=[6500, 1000])
+        # first attempt overshoots (8500 > TPM_LIMIT=8000), second attempt fits
+        redis = _mock_redis(incrby_side_effect=[8500, 1000])
         redis.expire = AsyncMock()
         redis.decrby = AsyncMock()
 
@@ -78,8 +78,8 @@ class TestReserveTokenBudget:
 
     @pytest.mark.asyncio
     async def test_returns_false_when_max_wait_exceeded(self):
-        # always overshoots -- never fits within budget
-        redis = _mock_redis(incrby_side_effect=[7000] * 100)
+        # always overshoots (> TPM_LIMIT=8000) -- never fits within budget
+        redis = _mock_redis(incrby_side_effect=[9000] * 100)
         redis.expire = AsyncMock()
         redis.decrby = AsyncMock()
 
@@ -96,7 +96,7 @@ class TestReserveTokenBudget:
         """Every incrby that overshoots must be matched by a decrby --
         otherwise the window's counter permanently leaks reserved budget
         that was never actually used, starving later real requests."""
-        redis = _mock_redis(incrby_side_effect=[6100, 6050, 999])
+        redis = _mock_redis(incrby_side_effect=[8100, 8050, 999])
         redis.expire = AsyncMock()
         redis.decrby = AsyncMock()
 
