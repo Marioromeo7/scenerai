@@ -88,9 +88,14 @@ async def lifespan(app: FastAPI):
         logger.warning("SECURITY: database_url contains the default 'changeme' password. Set DATABASE_URL in .env.")
     if not settings.groq_api_key:
         logger.warning("SECURITY: GROQ_API_KEY is not set — all LLM calls will fail.")
-    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    if settings.serverless_mode and settings.media_enabled:
+        raise RuntimeError("MEDIA_ENABLED must be false when SERVERLESS_MODE is enabled (no persistent worker is available).")
+    app.state.arq_pool = None
+    if not settings.serverless_mode:
+        app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     yield
-    await app.state.arq_pool.close()
+    if app.state.arq_pool is not None:
+        await app.state.arq_pool.close()
     await close_connections()
 
 
@@ -257,6 +262,8 @@ async def delete_persona(pid: str, db: AsyncSession = Depends(get_db), cu: User 
 @limiter.limit("10/minute")
 async def create_scenario(request: Request, body: ScenarioCreate, db: AsyncSession = Depends(get_db),
                            cu: User = Depends(get_current_user)):
+    if settings.serverless_mode:
+        raise HTTPException(503, "Scenario creation is disabled in the portfolio demo.")
     char_personality = sanitize_input(body.char_personality)
     greeting         = sanitize_input(body.greeting)
     meta = await generate_scenario_metadata(body.char_name, body.char_title, char_personality, greeting)
@@ -354,6 +361,8 @@ async def _get_owned_scenario(db: AsyncSession, sid: str, cu: User) -> Scenario:
 @app.put("/scenarios/{sid}", response_model=ScenarioOut)
 async def update_scenario(sid: str, body: ScenarioUpdate, db: AsyncSession = Depends(get_db),
                            cu: User = Depends(get_current_user)):
+    if settings.serverless_mode:
+        raise HTTPException(503, "Scenario editing is disabled in the portfolio demo.")
     s = await _get_owned_scenario(db, sid, cu)
     if s.is_published:
         raise HTTPException(403, "Published scenarios cannot be edited")
@@ -385,6 +394,8 @@ async def _enqueue_prefab_job(request: Request, db: AsyncSession, s: Scenario):
     which worker.py already handles — mark prefab_status=failed rather than
     leaving it stuck at 'pending' forever with no job ever queued. The
     retry-prefab endpoint remains available to recover from either failure."""
+    if settings.serverless_mode:
+        raise HTTPException(503, "Scenario publishing is disabled in the portfolio demo.")
     try:
         await request.app.state.arq_pool.enqueue_job(
             "prefab_engine_job", s.id,
@@ -397,9 +408,23 @@ async def _enqueue_prefab_job(request: Request, db: AsyncSession, s: Scenario):
         raise HTTPException(503, "Could not queue prefab job — try again shortly")
 
 
+async def _initialize_session_inline(
+    session_id: str, scenario_id: str, persona_name: str, persona_pronouns: str,
+    greeting: str, content_filter: str, preview: bool, restored_engine_state: dict | None,
+):
+    """Run the prefab-backed initializer for deployments without an ARQ worker."""
+    from worker import init_engine_job
+    await init_engine_job(
+        {}, session_id, scenario_id, persona_name, persona_pronouns, greeting,
+        content_filter, preview, restored_engine_state,
+    )
+
+
 @app.post("/scenarios/{sid}/publish", response_model=ScenarioOut)
 async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depends(get_db),
                             cu: User = Depends(get_current_user)):
+    if settings.serverless_mode:
+        raise HTTPException(503, "Scenario publishing is disabled in the portfolio demo.")
     s = await _get_owned_scenario(db, sid, cu)
     if s.is_published: raise HTTPException(400, "Scenario already published")
     s.is_published = True
@@ -412,6 +437,8 @@ async def publish_scenario(sid: str, request: Request, db: AsyncSession = Depend
 @limiter.limit("5/minute")
 async def retry_prefab(sid: str, request: Request, db: AsyncSession = Depends(get_db),
                         cu: User = Depends(get_current_user)):
+    if settings.serverless_mode:
+        raise HTTPException(503, "Scenario preparation is disabled in the portfolio demo.")
     s = await _get_owned_scenario(db, sid, cu)
     if not s.is_published: raise HTTPException(400, "Scenario is not published")
     if s.prefab_status == "ready": raise HTTPException(400, "Prefab is already ready")
@@ -543,6 +570,10 @@ async def create_session(
         raise HTTPException(404, "Scenario not found")
     if body.preview and sc.creator_id != cu.id:
         raise HTTPException(404, "Scenario not found")
+    if settings.serverless_mode and body.preview:
+        raise HTTPException(503, "Draft previews are disabled in the portfolio demo.")
+    if settings.serverless_mode and (not sc.is_published or sc.prefab_status != "ready" or not sc.prefab_engine_state):
+        raise HTTPException(503, "Only published, prefab-ready scenarios can be played in the portfolio demo.")
 
     p = (await db.execute(select(Persona).where(
         Persona.id == body.persona_id, Persona.user_id == cu.id
@@ -587,11 +618,19 @@ async def create_session(
         await redis.sadd(f"scenario_sessions:{body.scenario_id}", session_id)
 
     try:
-        await request.app.state.arq_pool.enqueue_job(
-            "init_engine_job", session_id, sc.id,
-            p.name, p.pronouns, sc.greeting, body.content_filter, body.preview,
-            last_log.engine_state if last_log else None,
-        )
+        if settings.serverless_mode:
+            # Vercel has no persistent ARQ worker. Initialize this one-call,
+            # prefab-backed session in the request so the demo is playable.
+            await _initialize_session_inline(
+                session_id, sc.id, p.name, p.pronouns, sc.greeting,
+                body.content_filter, body.preview, last_log.engine_state if last_log else None,
+            )
+        else:
+            await request.app.state.arq_pool.enqueue_job(
+                "init_engine_job", session_id, sc.id,
+                p.name, p.pronouns, sc.greeting, body.content_filter, body.preview,
+                last_log.engine_state if last_log else None,
+            )
     except Exception as e:
         # Distinct from the job itself failing (worker.py already sets status=error
         # for that) — this is the enqueue call never reaching Redis at all. Without

@@ -33,6 +33,7 @@ class ErrorBoundary extends Component {
 
 const MEDIA_ENABLED = import.meta.env.VITE_MEDIA_ENABLED === 'true'
 const DISABLE_SSE = import.meta.env.VITE_DISABLE_SSE === 'true'
+const PORTFOLIO_MODE = import.meta.env.VITE_PORTFOLIO_MODE === 'true'
 
 const TAG_CLASS = {
   drama:'drama', power:'power', grief:'grief', betrayal:'betrayal',
@@ -1227,7 +1228,7 @@ function App() {
   // React Query data fetching
   const { data: scenarioPage } = useQuery({
     queryKey: ['scenarios'],
-    queryFn: () => api.listScenarios(),
+    queryFn: () => PORTFOLIO_MODE ? api.listPublicScenarios() : api.listScenarios(),
     enabled: !!user,
     refetchInterval: (data) => {
       const items = data?.items || []
@@ -1503,7 +1504,7 @@ function App() {
       )
     : filtered
 
-  const tabs = ['persona','scenario','browse','history','billing',
+  const tabs = ['persona', ...(PORTFOLIO_MODE ? [] : ['scenario']), 'browse','history','billing',
                 ...(user?.is_admin ? ['telemetry'] : []), 'settings']
 
   return (
@@ -1577,7 +1578,7 @@ function App() {
         </div>
 
         {/* Scenario */}
-        <div className={`tab-panel ${activeTab==='scenario'?'active':''}`}>
+        {!PORTFOLIO_MODE && <div className={`tab-panel ${activeTab==='scenario'?'active':''}`}>
           <div className="section-title">{editingScenario ? 'Edit scenario' : 'New scenario'}</div>
           <div className="field"><label>Character name *</label><input type="text" value={sCharName} onChange={e=>setSCharName(e.target.value)} placeholder="e.g. Malthe Richter"/></div>
           <div className="field"><label>Pronouns</label>
@@ -1598,7 +1599,7 @@ function App() {
                 <button className="btn btn-ghost" onClick={()=>{setSCharName('');setSTitle('');setSPersonality('');setSOpening('')}}>Clear</button>
               </>
           }
-        </div>
+        </div>}
 
         {/* Browse */}
         <div className={`tab-panel ${activeTab==='browse'?'active':''}`}>
@@ -1834,17 +1835,17 @@ function App() {
                 saved={savedIds.has(s.id)}
                 onSave={toggleSave}
                 onPlay={openPlay}
-                isOwner={true}
+                isOwner={!PORTFOLIO_MODE}
                 onEdit={startEditScenario}
                 onDelete={deleteScenario}
                 onPublish={publishScenario}
                 onUnpublish={unpublishScenario}
               />
             ))}
-            <div className="card-add" onClick={()=>{setEditingScenario(null);setActiveTab('scenario')}}>
+            {!PORTFOLIO_MODE && <div className="card-add" onClick={()=>{setEditingScenario(null);setActiveTab('scenario')}}>
               <div className="card-add-icon">+</div>
               <div className="card-add-label">Create scenario</div>
-            </div>
+            </div>}
           </div>
           {scenarioHasMore && (
             <button

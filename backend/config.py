@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     groq_api_key: str = ""
     media_enabled: bool = False
+    # Vercel portfolio deployments do not run a persistent ARQ worker. Ready
+    # prefab sessions can initialize inline; background authoring jobs stay off.
+    serverless_mode: bool = False
     alert_webhook_url: str = ""
     alert_webhook_format: str = "generic"
 

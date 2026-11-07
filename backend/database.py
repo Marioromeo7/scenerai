@@ -3,11 +3,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 from redis.asyncio import Redis
 from config import settings
 
-engine = create_async_engine(settings.database_url, pool_size=10, max_overflow=20, echo=False)
+engine = create_async_engine(
+    settings.database_url,
+    **({"poolclass": NullPool} if settings.serverless_mode else {"pool_size": 10, "max_overflow": 20}),
+    echo=False,
+)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
