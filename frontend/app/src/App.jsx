@@ -31,6 +31,9 @@ class ErrorBoundary extends Component {
   }
 }
 
+const MEDIA_ENABLED = import.meta.env.VITE_MEDIA_ENABLED === 'true'
+const DISABLE_SSE = import.meta.env.VITE_DISABLE_SSE === 'true'
+
 const TAG_CLASS = {
   drama:'drama', power:'power', grief:'grief', betrayal:'betrayal',
   romance:'romance', thriller:'thriller', tension:'thriller',
@@ -677,7 +680,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
   // frequency, best-effort background job — a turn's text lands immediately,
   // its image/narration/video typically follow within ~10-20s.
   useEffect(() => {
-    if (!sessionId) return
+    if (!MEDIA_ENABLED || !sessionId) return
     let cancelled = false
     async function poll() {
       try {
@@ -720,6 +723,18 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
     streamAbortRef.current = controller
 
     try {
+      if (DISABLE_SSE) {
+        const data = await api.playTurn(sessionId, text, engineModel)
+        setMessages(prev => {
+          const updated = [...prev]
+          updated[assistantIdx] = {
+            role: 'assistant', content: data.response,
+            sovereign: data.sovereign, violations: data.violations,
+            turn: data.turn, streaming: false,
+          }
+          return updated
+        })
+      } else {
       const response = await api.playTurnStream(sessionId, text, engineModel, controller.signal)
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -772,6 +787,7 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
             }
           }
         }
+      }
       }
     } catch (err) {
       // AbortError means the view is being torn down (see the unmount
@@ -870,19 +886,19 @@ function PlayView({ scenario, persona, onBack, engineModel, contentFilter, previ
           <div className="play-title">{scenario?.title || charName}</div>
         </div>
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
-          <button onClick={toggleMuted} title={muted?'Unmute scene narration':'Mute scene narration'}
+          {MEDIA_ENABLED && <button onClick={toggleMuted} title={muted?'Unmute scene narration':'Mute scene narration'}
             style={{background:'none',border:'1px solid var(--border)',borderRadius:8,width:30,height:30,
               cursor:'pointer',color:'var(--text-secondary)',fontSize:14,display:'flex',
               alignItems:'center',justifyContent:'center'}}>
             {muted ? '🔇' : '🔊'}
-          </button>
-          <button onClick={()=>setMovieMode(v=>!v)} title="Watch generated scenes as a movie"
+          </button>}
+          {MEDIA_ENABLED && <button onClick={()=>setMovieMode(v=>!v)} title="Watch generated scenes as a movie"
             style={{background:movieMode?'var(--accent-dim)':'none',
               border:`1px solid ${movieMode?'var(--accent)':'var(--border)'}`,borderRadius:8,
               padding:'5px 12px',cursor:'pointer',color:movieMode?'var(--accent)':'var(--text-secondary)',
               fontSize:12,letterSpacing:'.04em'}}>
             {movieMode ? '💬 Chat' : '🎬 Movie'}
-          </button>
+          </button>}
           {persona && (
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               <div className="card-persona-dot">{personaInit}</div>

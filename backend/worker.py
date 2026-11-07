@@ -187,6 +187,9 @@ async def generate_turn_media_job(
     as a playlist in movie mode, but a single always-current file is also
     kept for direct download/sharing.
     """
+    if not settings.media_enabled:
+        logger.info("Skipping media job because media generation is disabled")
+        return
     async with AsyncSessionLocal() as db:
         existing = (await db.execute(
             select(TurnMedia).where(TurnMedia.session_id == session_id, TurnMedia.turn == turn)
@@ -215,6 +218,9 @@ async def regenerate_turn_media_job(ctx, session_id: str, turn: int):
     TurnMedia row, reusing its stored prompt/narration/voice (see
     TurnMedia's docstring) with a genuinely different seed -- not the one
     that already produced whatever the user is unhappy with."""
+    if not settings.media_enabled:
+        logger.info("Skipping media regeneration because media generation is disabled")
+        return
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
             select(TurnMedia).where(TurnMedia.session_id == session_id, TurnMedia.turn == turn)

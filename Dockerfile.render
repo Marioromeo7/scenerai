@@ -1,0 +1,20 @@
+FROM node:20-alpine AS frontend-build
+WORKDIR /src/frontend/app
+COPY frontend/app/package.json frontend/app/package-lock.json ./
+RUN npm ci
+COPY frontend/app/ ./
+ARG VITE_DISABLE_SSE=false
+ARG VITE_MEDIA_ENABLED=false
+ENV VITE_DISABLE_SSE=$VITE_DISABLE_SSE VITE_MEDIA_ENABLED=$VITE_MEDIA_ENABLED
+RUN npm run build
+
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PORT=10000
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/ ./
+COPY --from=frontend-build /src/frontend/app/dist/ ./static/
+COPY deploy/render_start.py ./render_start.py
+EXPOSE 10000
+CMD ["python", "render_start.py"]

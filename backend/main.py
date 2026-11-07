@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
@@ -722,7 +723,7 @@ async def _execute_turn(request: Request, session_id: str, cu: User, redis,
         # Redis hiccup) must not fail the turn itself -- the text response
         # already succeeded and matters more than the illustration.
         media_context = result.get("media_context")
-        if media_context:
+        if settings.media_enabled and media_context:
             try:
                 await request.app.state.arq_pool.enqueue_job(
                     "generate_turn_media_job", session_id, ctx["scenario_id"], cu.id, result["turn"],
@@ -828,6 +829,8 @@ async def regenerate_turn_media(session_id: str, turn: int, request: Request,
     """Re-rolls a turn's image/audio/video with a new seed, reusing the
     stored prompt/narration/voice (see TurnMedia's docstring in models.py)
     -- for when generation quality (eyes especially) came out bad."""
+    if not settings.media_enabled:
+        raise HTTPException(404, "Media generation is disabled")
     row = (await db.execute(
         select(TurnMedia).where(TurnMedia.session_id == session_id, TurnMedia.turn == turn, TurnMedia.user_id == cu.id)
     )).scalar_one_or_none()
@@ -1041,7 +1044,7 @@ async def play_turn_stream(session_id: str, request: Request, body: PlayTurnWith
                             )
                             await db.commit()
                     media_context = chunk.get("media_context")
-                    if media_context:
+                    if settings.media_enabled and media_context:
                         try:
                             await request.app.state.arq_pool.enqueue_job(
                                 "generate_turn_media_job", session_id, ctx["scenario_id"], cu.id, chunk["turn"],
@@ -1150,3 +1153,11 @@ async def get_session_history(session_id: str, db: AsyncSession = Depends(get_db
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "scenarai-api", "version": "2.0.0"}
+
+
+# Render's single web service serves the built portfolio UI and API from one
+# origin. Local Docker Compose keeps serving the frontend from its own Nginx
+# container, so this mount is enabled only in the Render image.
+PORTFOLIO_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(PORTFOLIO_STATIC_DIR):
+    app.mount("/", StaticFiles(directory=PORTFOLIO_STATIC_DIR, html=True), name="portfolio-ui")

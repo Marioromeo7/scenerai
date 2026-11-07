@@ -1,5 +1,7 @@
 import logging
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,27 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
     groq_api_key: str = ""
+    media_enabled: bool = False
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_postgres_url(cls, value):
+        # Hosted Postgres providers commonly show a plain postgresql:// URL;
+        # this service uses SQLAlchemy's asyncpg driver.
+        if isinstance(value, str):
+            parts = urlsplit(value)
+            scheme = parts.scheme
+            if scheme == "postgres":
+                scheme = "postgresql+asyncpg"
+            elif scheme == "postgresql":
+                scheme = "postgresql+asyncpg"
+            if scheme == "postgresql+asyncpg":
+                # asyncpg calls its TLS option `ssl`, while providers often
+                # publish libpq-style `sslmode=require` URLs.
+                query = [("ssl" if key == "sslmode" else key, val)
+                         for key, val in parse_qsl(parts.query, keep_blank_values=True)]
+                return urlunsplit((scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+        return value
     cors_origins: str = "http://localhost:3000"
 
     # Section 4 media pipeline (NEXT_PHASE_PLAN.md) — zero egress, S3-compatible.

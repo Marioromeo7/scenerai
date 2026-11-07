@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: scenarai-portfolio
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GROQ_API_KEY
+        sync: false
+      - key: MEDIA_ENABLED
+        value: "false"
+      - key: CORS_ORIGINS
+        value: "http://localhost"

@@ -33,13 +33,13 @@ its own empirical research behind the prompt/generation strategy, not just an AP
 
 ## Quick start
 
-```bash
-cp .env.example .env
-# Fill in GROQ_API_KEY and change the default passwords in .env
-docker compose up --build
+```powershell
+Copy-Item .env.example .env
+# Set POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, and GROQ_API_KEY in .env.
+docker compose up --build -d
 ```
 
-Open http://localhost — register, create a persona, create a scenario, publish it, then play.
+Open http://localhost — register, create a persona, create a scenario, publish it, then play. For a temporary public portfolio link, see [docs/PORTFOLIO_DEPLOYMENT.md](docs/PORTFOLIO_DEPLOYMENT.md).
 
 ## How the text engine works
 
@@ -115,13 +115,13 @@ manual checks):
 
 ## Services
 
-| Service  | Port | Description              |
-|----------|------|--------------------------|
-| nginx    | 80   | Reverse proxy (entry)    |
-| frontend | 3000 | React + Vite dev server  |
-| backend  | 9000 | FastAPI                  |
-| postgres | 5432 | Database                 |
-| redis    | 6379 | Session cache + engine state |
+| Service | Port | Exposure |
+|---------|------|----------|
+| Nginx | 80 | Host loopback only |
+| Frontend | 80 | Internal Compose network |
+| Backend | 8000 | Internal Compose network |
+| PostgreSQL | 5432 | Internal Compose network |
+| Redis | 6379 | Internal Compose network |
 
 ## Environment variables
 
@@ -131,14 +131,18 @@ See `.env.example` for all required variables. The most important:
 - `JWT_SECRET` — must be a long random string in production.
 - Database/Redis passwords — change from defaults before any real deployment.
 
-## Production checklist
-
-- [ ] Change all default passwords in `.env`
-- [ ] Set `JWT_SECRET` to a cryptographically random value
-- [ ] Remove exposed `5432` and `6379` ports from `docker-compose.yml`
-- [ ] Add HTTPS (Caddy, Certbot, or cloud load balancer in front of nginx)
-- [ ] Set `CORS_ORIGINS` to your actual domain
-
 ---
 
 Built by Mario George — [LinkedIn](https://www.linkedin.com/in/mario-hossam-mitry-george) · [GitHub](https://github.com/Marioromeo7) · [metrymarioromeo546@gmail.com](mailto:metrymarioromeo546@gmail.com)
+
+## Portfolio preview deployment
+
+See [docs/PORTFOLIO_DEPLOYMENT.md](docs/PORTFOLIO_DEPLOYMENT.md) for the PC-independent Render setup and the temporary local tunnel option. In short:
+
+```powershell
+Copy-Item .env.example .env
+# Set POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, and GROQ_API_KEY in .env.
+docker compose up --build -d
+```
+
+Open http://localhost. Only Nginx is published to the host, on `127.0.0.1:80`; database, Redis, and API ports remain private inside Compose. Generated media is disabled for the temporary portfolio profile. To expose the local site temporarily, run `cloudflared tunnel --url http://localhost:80` in a separate terminal. The link is temporary and anyone with it can access the demo; Groq usage is shared across visitors.

@@ -1,16 +1,14 @@
-FROM node:20-alpine
+FROM node:20-alpine AS build
 WORKDIR /app
-# package-lock.json wasn't being copied here -- `npm install` ran with only
-# package.json present in the build context at that point, so it couldn't
-# use the lockfile at all despite one being committed to the repo. Builds
-# weren't reproducible: two `docker compose build frontend` runs at
-# different times could resolve different transitive dependency versions
-# within package.json's semver ranges, silently diverging from whatever
-# was actually tested. `npm ci` (not `npm install`) enforces that
-# package.json and package-lock.json agree, failing loudly instead of
-# silently re-resolving if they ever drift.
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev"]
+ARG VITE_DISABLE_SSE=true
+ARG VITE_MEDIA_ENABLED=false
+ENV VITE_DISABLE_SSE=$VITE_DISABLE_SSE VITE_MEDIA_ENABLED=$VITE_MEDIA_ENABLED
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
