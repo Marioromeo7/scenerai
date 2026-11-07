@@ -24,6 +24,8 @@ do not import the whole file without removing those unrelated entries.
 Import `Marioromeo7/scenerai` on the `main` branch. Use the repository root (`.`), the **Services**
 framework, and the existing service map in `vercel.json`. It routes the backend to `/api` and the
 frontend to `/`. Do not import `imagepipe` or `loadtest` as deployed services.
+The FastAPI service declares its runtime dependencies in `backend/pyproject.toml` because Vercel's
+Python builder installs from that file; `backend/requirements.txt` remains for Docker/local setup.
 
 Add these variables to the project's **Production** environment before triggering the first
 production build:
@@ -75,3 +77,4 @@ limits.
 Later pushes to `main` create new production deployments. To take the demo offline, disable or
 delete the Vercel project. Delete the Neon and Upstash resources separately if you no longer need
 their stored data.
+
