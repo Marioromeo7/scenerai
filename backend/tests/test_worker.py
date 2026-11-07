@@ -76,7 +76,8 @@ class TestPrefabEngineJob:
 
         with patch('worker.get_redis', AsyncMock(return_value=redis)), \
              patch('worker.AsyncSessionLocal', session_local), \
-             patch('worker.engine_prefab', AsyncMock(return_value=None)):
+             patch('worker.engine_prefab', AsyncMock(return_value=None)), \
+             patch('worker.send_alert', new=AsyncMock()) as send_alert:
             _run(worker.prefab_engine_job(
                 {}, 'scenario-1', 'Iris', 'she/her', 'Archivist', 'guarded', 'greeting'
             ))
@@ -84,6 +85,8 @@ class TestPrefabEngineJob:
         values = db.execute.call_args[0][0]
         assert values.__visit_name__ == 'update'  # sanity: it's an UPDATE statement
         redis.decr.assert_awaited_once()
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.args[0] == 'scenario_prefab_failed'
 
     def test_engine_prefab_exception_sets_failed_and_still_decrements(self):
         redis = _mock_redis(incr_return=1)
@@ -91,7 +94,8 @@ class TestPrefabEngineJob:
 
         with patch('worker.get_redis', AsyncMock(return_value=redis)), \
              patch('worker.AsyncSessionLocal', session_local), \
-             patch('worker.engine_prefab', AsyncMock(side_effect=RuntimeError('Groq down'))):
+             patch('worker.engine_prefab', AsyncMock(side_effect=RuntimeError('Groq down'))), \
+             patch('worker.send_alert', new=AsyncMock()) as send_alert:
             _run(worker.prefab_engine_job(
                 {}, 'scenario-1', 'Iris', 'she/her', 'Archivist', 'guarded', 'greeting'
             ))
@@ -99,6 +103,8 @@ class TestPrefabEngineJob:
         # finally: block must still run even though the try block raised
         redis.decr.assert_awaited_once_with(worker.PREFAB_JOB_KEY)
         db.commit.assert_awaited_once()
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.args[0] == 'scenario_prefab_failed'
 
     def test_concurrency_gate_skips_engine_prefab_entirely(self):
         """count > PREFAB_MAX must bail out before ever calling engine_prefab."""
@@ -222,7 +228,8 @@ class TestInitEngineJob:
 
         with patch('worker.get_redis', AsyncMock(return_value=redis)), \
              patch('worker.AsyncSessionLocal', session_local), \
-             patch('worker.engine_init_from_prefab', AsyncMock(side_effect=RuntimeError('Groq down'))):
+             patch('worker.engine_init_from_prefab', AsyncMock(side_effect=RuntimeError('Groq down'))), \
+             patch('worker.send_alert', new=AsyncMock()) as send_alert:
             _run(worker.init_engine_job(
                 {}, 'session-1', 'scenario-1', 'Sam', 'they/them', 'greeting text',
                 'off', False, None,
@@ -231,6 +238,8 @@ class TestInitEngineJob:
         written = json.loads(redis.setex.call_args[0][2])
         assert written['status'] == 'error'
         assert 'Groq down' in written['error']
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.args[0] == 'session_initialization_failed'
 
     def test_missing_redis_session_does_not_crash(self):
         """If the session key vanished (e.g. TTL race), the job must finish

@@ -31,6 +31,20 @@ class TestEstimateTokens:
 
 class TestReserveTokenBudget:
     @pytest.mark.asyncio
+    async def test_alerts_when_reserved_capacity_reaches_80_percent(self):
+        redis = _mock_redis(incrby_side_effect=[int(rate_limiter.TPM_LIMIT * 0.8)])
+        redis.expire = AsyncMock()
+
+        with patch('alerting.send_alert', new=AsyncMock()) as send_alert:
+            ok = await rate_limiter.reserve_token_budget(
+                redis, estimated_tokens=int(rate_limiter.TPM_LIMIT * 0.8)
+            )
+
+        assert ok is True
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.args[0] == 'groq_capacity_high'
+
+    @pytest.mark.asyncio
     async def test_reserves_immediately_when_under_budget(self):
         redis = _mock_redis(incrby_side_effect=[1000])
         redis.expire = AsyncMock()

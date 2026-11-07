@@ -34,18 +34,18 @@ async def send_alert(
     details: dict | None = None,
     cooldown_key: str | None = None,
     cooldown_seconds: int = 300,
-) -> None:
-    """Send a best-effort alert; failures never break the app request/job."""
+) -> bool:
+    """Send a best-effort alert; return whether the webhook accepted it."""
     url = settings.alert_webhook_url.strip()
     if not url:
-        return
+        return False
 
     if cooldown_key:
         now = time.monotonic()
         async with _cooldown_lock:
             previous = _last_sent.get(cooldown_key, 0.0)
             if now - previous < cooldown_seconds:
-                return
+                return False
             _last_sent[cooldown_key] = now
             if len(_last_sent) > 128:
                 _last_sent.clear()
@@ -55,9 +55,11 @@ async def send_alert(
         async with httpx.AsyncClient(timeout=3.0, follow_redirects=False) as client:
             response = await client.post(url, json=_payload(event, summary, details))
             response.raise_for_status()
+        return True
     except Exception as exc:
         # HTTP client exceptions can include the request URL, which is a secret.
         logger.warning("Webhook alert delivery failed (%s)", type(exc).__name__)
+        return False
 
 
 def send_alert_sync(event: str, summary: str, *, details: dict | None = None) -> None:
