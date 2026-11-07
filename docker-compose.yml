@@ -60,6 +60,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       GROQ_API_KEY: ${GROQ_API_KEY:?Set GROQ_API_KEY in .env}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-generic}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       MEDIA_ENABLED: ${MEDIA_ENABLED:-false}
     volumes:
@@ -90,6 +92,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-scenarai}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/scenarai
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
       GROQ_API_KEY: ${GROQ_API_KEY:?Set GROQ_API_KEY in .env}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-generic}
       MEDIA_ENABLED: ${MEDIA_ENABLED:-false}
       IMAGE_BRIDGE_URL: ${IMAGE_BRIDGE_URL:-http://host.docker.internal:8188}
     extra_hosts:
