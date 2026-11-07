@@ -104,6 +104,23 @@ app.add_middleware(
 app.add_middleware(RequestIDMiddleware)
 
 
+@app.middleware("http")
+async def strip_api_prefix_for_single_service(request: Request, call_next):
+    """The local nginx proxy strips /api before forwarding to FastAPI.
+
+    Render serves the frontend and API from this process, so perform the same
+    prefix rewrite here before routing. Keep /api as a path boundary so routes
+    such as /apiary are not rewritten accidentally.
+    """
+    path = request.scope["path"]
+    if path == "/api" or path.startswith("/api/"):
+        request.scope["path"] = path[4:] or "/"
+        raw_path = request.scope.get("raw_path")
+        if raw_path:
+            request.scope["raw_path"] = raw_path[4:] or b"/"
+    return await call_next(request)
+
+
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request, exc):
     return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Please slow down."})
