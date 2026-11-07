@@ -37,6 +37,21 @@ def _log_call(model, max_tokens, temp, latency, system, history, response):
     )
 
 
+def _model_call_options(model):
+    """Keep GPT-OSS reasoning in its separate channel, not the app reply."""
+    # Groq SDK 0.11.0 predates this API field in its typed signature; extra_body
+    # passes it through without requiring an SDK upgrade.
+    return {
+        "extra_body": {"include_reasoning": False, "reasoning_effort": "low"}
+    } if model.startswith("openai/gpt-oss-") else {}
+
+
+def _completion_token_limit(model, max_tokens):
+    # Tiny labels/boolean extractions otherwise spend their whole output
+    # budget on GPT-OSS reasoning and return no user-facing content.
+    return max(max_tokens, 128) if model.startswith("openai/gpt-oss-") else max_tokens
+
+
 def call(system, history, max_tokens=600, temp=0.82, retries=6):
     client = _client_var.get(None)
     model  = _model_var.get()
@@ -48,11 +63,19 @@ def call(system, history, max_tokens=600, temp=0.82, retries=6):
             r  = client.chat.completions.create(
                 model=model,
                 messages=[{'role': 'system', 'content': system}, *history],
-                max_tokens=max_tokens,
+                max_tokens=_completion_token_limit(model, max_tokens),
                 temperature=temp,
+                **_model_call_options(model),
             )
             latency  = round(time.time() - t0, 2)
-            response = r.choices[0].message.content.strip()
+            choice = r.choices[0]
+            response = (choice.message.content or '').strip()
+            if not response:
+                logger.error(
+                    'Groq returned empty final content (model=%s max_tokens=%d finish_reason=%s)',
+                    model, _completion_token_limit(model, max_tokens), choice.finish_reason,
+                )
+                raise RuntimeError('Groq returned an empty response')
             _log_call(model, max_tokens, temp, latency, system, history, response)
             return response, latency
         except Exception as e:
@@ -117,9 +140,10 @@ async def async_stream_call(system, history, max_tokens=600, temp=0.82, retries=
             stream = await async_client.chat.completions.create(
                 model=model,
                 messages=[{'role': 'system', 'content': system}, *history],
-                max_tokens=max_tokens,
+                max_tokens=_completion_token_limit(model, max_tokens),
                 temperature=temp,
                 stream=True,
+                **_model_call_options(model),
             )
             async for chunk in stream:
                 delta = chunk.choices[0].delta.content
@@ -128,6 +152,8 @@ async def async_stream_call(system, history, max_tokens=600, temp=0.82, retries=
                     yielded_any = True
                     yield delta
             response = ''.join(collected)
+            if not response.strip():
+                raise RuntimeError('Groq returned an empty streamed response')
             latency  = round(time.time() - t0, 2)
             logger.info('[LLM STREAM] done — latency=%.2fs tokens_out=%d | → "%s"',
                         latency, len(collected), response[:80].replace('\n', ' '))

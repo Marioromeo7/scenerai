@@ -1,0 +1,135 @@
+{
+  "entities": [
+    {
+      "name": "Player",
+      "pronouns": "they/them",
+      "role": "",
+      "appearance": "They stand about 5'7\" with a lean, wiry build that hints at years of manual labor, their shoulders tense and slightly hunched. Their hair is cropped short, dark brown with a few silver strands at the temples, framing an angular face marked by a faint scar across the left eyebrow. They wear a faded charcoal jumpsuit with a single, worn patch over the right shoulder, and their hands rest poised but restrained from the console.",
+      "physical_state": "",
+      "mood": "neutral",
+      "location": "unknown",
+      "doing": "nothing in particular",
+      "present": true,
+      "is_player": true,
+      "weight": 1.0,
+      "emotional_state": "",
+      "history": [],
+      "saved_assumptions": [],
+      "behavioral_read": "",
+      "never_does": "",
+      "integrity_resolve": 1.0,
+      "integrity_notes": [],
+      "shy": false,
+      "is_collective": false,
+      "collective_of": [],
+      "visual_tags": "",
+      "visual_tags_source": "",
+      "voice_id": "",
+      "voice_speed": 1.0
+    },
+    {
+      "name": "Mara Venn",
+      "pronouns": "she/her",
+      "role": "Relay engineer and former survey-ship officer",
+      "appearance": "Mara Venn stands at 5'9\" with a wiry, athletic build that hints at years of rigorous training. Her hair is cropped close to the scalp, a bright silver that catches the harsh relay room lights, framing a sharp, angular face with a faint scar running from her left temple to the brow. Her eyes are a piercing steel blue, and her skin is a smooth, olive tone that contrasts sharply with the other character’s darker complexion.",
+      "physical_state": "",
+      "mood": "neutral",
+      "location": "unknown",
+      "doing": "nothing in particular",
+      "present": true,
+      "is_player": false,
+      "weight": 1.0,
+      "emotional_state": "",
+      "history": [],
+      "saved_assumptions": [],
+      "behavioral_read": "Mara Venn’s core drive is to keep the station alive, to prevent the same fate that swallowed Meridian. She conceals the truth that she left the survey ship because she sensed a silent threat, a warning she never voiced. She exerts power by holding the relay’s key switches in her palm, refusing to let the storm’s chaos dictate the station’s fate. She fears that opening the lower hatch will unleash whatever sealed Meridian’s silence, a danger she has rehearsed in her mind for years. In this tense scene she regards the crew as fragile allies, their trust a fragile bridge over the storm’s roar. Under pressure she remains calm, her fingers hovering over the controls, waiting for the older voice’s next command. Under pressure, Mara Venn always keeps the hatch closed.",
+      "never_does": "Mara Venn would never abandon the station to the storm.",
+      "integrity_resolve": 1.0,
+      "integrity_notes": [],
+      "shy": false,
+      "is_collective": false,
+      "collective_of": [],
+      "visual_tags": "",
+      "visual_tags_source": "",
+      "voice_id": "",
+      "voice_speed": 1.0
+    },
+    {
+      "name": "older voice",
+      "pronouns": "he/him",
+      "role": "",
+      "appearance": "He stands at 6'2\", a broad-shouldered frame that carries the weight of years in the void. His hair is a thin, silver-grey, cut close to the scalp, and his eyes are a piercing steel blue that seem to flicker with static. His skin is weather‑tanned and leathery, and his face is square‑jawed, marked by a faint, shallow scar that runs from the left temple down to the jawline.",
+      "physical_state": "",
+      "mood": "neutral",
+      "location": "unknown",
+      "doing": "nothing in particular",
+      "present": true,
+      "is_player": false,
+      "weight": 1.0,
+      "emotional_state": "",
+      "history": [],
+      "saved_assumptions": [],
+      "behavioral_read": "The older voice’s core drive is to preserve the station’s fragile equilibrium, even if that means silencing the very signals that could bring salvation. He conceals the knowledge that the sealed lower hatch contains a dormant containment field that could release a deadly anomaly if disturbed. He exerts power by projecting his warning through the cracked speaker, forcing Mara to trust his authority over her own instincts. He fears that any misstep will trigger the storm’s fury and collapse the station’s remaining systems. He regards Mara as a capable engineer but also as a potential liability, judging her every hesitation with a cold, calculating gaze. Under pressure, the older voice always insists on silence, refusing to let anyone touch the hatch until he can confirm its safety.",
+      "never_does": "Older Voice would never reveal the dormant containment field hidden in the sealed lower hatch.",
+      "integrity_resolve": 1.0,
+      "integrity_notes": [],
+      "shy": false,
+      "is_collective": false,
+      "collective_of": [],
+      "visual_tags": "",
+      "visual_tags_source": "",
+      "voice_id": "",
+      "voice_speed": 1.0
+    }
+  ],
+  "world": {
+    "location": "relay room of a battered station during a storm",
+    "time_of_day": "unknown",
+    "era": "future space station era",
+    "atmosphere": "tense, ominous, stormy",
+    "flags": [
+      "cover-up",
+      "coercion",
+      "moral dilemma"
+    ]
+  },
+  "memory": {
+    "pinned": [
+      "Mara Venn, a relay engineer, is alone in a storm‑hit station’s relay room with the power bus cut off.",
+      "She places a battered flight recorder with a blinking red indicator beside a dark console, noting its signal carries the call sign of the lost survey ship Meridian.",
+      "Mara recalls that Meridian went quiet just before she left it six years earlier, hinting at a hidden past.",
+      "An older, authoritative voice warns her not to open the lower hatch, implying danger behind it.",
+      "Mara’s hands are kept away from the controls, showing her caution and respect for the unknown.",
+      "She offers to either destroy the relay or investigate the source of the signal, revealing her conflict between safety and truth.",
+      "The power dynamic is tense: the voice’s authority is unclear, yet Mara holds technical control and must decide.",
+      "Mara’s decision will determine whether she uncovers a secret tied to Meridian or protects the station from potential harm."
+    ],
+    "summaries": []
+  },
+  "layer1": "Mara Venn, a relay engineer who once served on the survey ship Meridian, is currently in the relay room of a station battered by a storm. Six years earlier she left Meridian before its final voyage, a fact she never explained. The power bus is cut, yet a battered flight recorder with a blinking red indicator sits beside a dark console, and a signal bearing Meridian’s call sign is being decoded. The crew’s history with the ship is tense: Mara remembers the ship going quiet just before she departed. In this moment she is confronted with a warning from an older voice—“Do not open the lower hatch”—and she must decide whether to destroy the relay or investigate the source of the signal, all while keeping her hands away from the controls. The power dynamic is strained: the voice’s authority is unclear, but Mara holds the technical control and must weigh her desire to uncover the truth against the potential danger of the unknown signal.",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "The relay room shivers as a storm leans against the station. Mara Venn sets a battered flight recorder beside the dark console; its red indicator blinks although the power bus is cut. The signal carries the call sign of the survey ship Meridian, lost six years ago. Mara watches the waveform climb. 'That ship went quiet before I left it,' she says. 'This part is new.' A voice crackles through the speaker, older and unmistakably yours: 'Do not open the lower hatch.' Behind the sealed hatch, metal turns once in its frame. Mara keeps her hands away from the controls. 'I can kill the relay, or we can find out who sent that. Your call.'"
+    }
+  ],
+  "display_history": [
+    {
+      "role": "assistant",
+      "content": "The relay room shivers as a storm leans against the station. Mara Venn sets a battered flight recorder beside the dark console; its red indicator blinks although the power bus is cut. The signal carries the call sign of the survey ship Meridian, lost six years ago. Mara watches the waveform climb. 'That ship went quiet before I left it,' she says. 'This part is new.' A voice crackles through the speaker, older and unmistakably yours: 'Do not open the lower hatch.' Behind the sealed hatch, metal turns once in its frame. Mara keeps her hands away from the controls. 'I can kill the relay, or we can find out who sent that. Your call.'"
+    }
+  ],
+  "turn": 0,
+  "scene_lang": "English",
+  "last_target": "Mara Venn",
+  "sp_note": "",
+  "char_personality": "Mara is precise, dry-witted, and careful with every claim. She is loyal to the people in her care, but distrustful of institutions that call secrecy a form of protection. Six years ago she served aboard the survey ship Meridian and has never explained why she left before its final voyage. She wants to understand the new signal without letting fear decide what the crew does next. She will not knowingly endanger someone just to protect her own reputation.",
+  "filter_state": "off",
+  "filter_lock": false,
+  "metrics": {
+    "turns": 0,
+    "sv_violations": 0,
+    "latencies": [],
+    "compressions": 0
+  }
+}

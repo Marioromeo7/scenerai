@@ -23,7 +23,7 @@ from engine.call import async_stream_call
 from engine.visual_prompts import build_scene_image_prompt
 from engine.voice_prompts import get_voice_profile, filter_for_narration
 from database import get_redis
-from rate_limiter import reserve_token_budget
+from rate_limiter import reserve_token_budget, TPM_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,15 @@ async def _reserve_turn_budget(estimated_tokens: int = TURN_TOKEN_ESTIMATE):
     Raises RuntimeError (not silently proceeds) if the queue doesn't clear
     within reserve_token_budget's max_wait -- callers should surface that
     as a capacity/retry message, not let the turn fire into a near-certain
-    429 storm."""
+    429 storm. Full initializations are multi-minute, multi-call workflows;
+    reserve one full minute of capacity for them rather than asking the
+    per-minute gate to reserve their entire 20k-token total at once (which
+    can never fit under the provider's 8k TPM ceiling). Individual Groq
+    calls still use the SDK's rate-limit retry handling."""
     redis = await get_redis()
     max_wait = 60.0 if estimated_tokens > TURN_TOKEN_ESTIMATE else 30.0
-    ok = await reserve_token_budget(redis, estimated_tokens, max_wait=max_wait)
+    reservation = min(estimated_tokens, TPM_LIMIT)
+    ok = await reserve_token_budget(redis, reservation, max_wait=max_wait)
     if not ok:
         raise RuntimeError("Groq capacity is fully booked right now — try again shortly.")
 

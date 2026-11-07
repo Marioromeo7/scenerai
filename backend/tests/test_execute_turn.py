@@ -252,7 +252,8 @@ class TestExecuteTurnPlaysCount:
 
 class TestExecuteTurnMediaEnqueue:
     @pytest.mark.asyncio
-    async def test_enqueues_media_job_when_media_context_present(self):
+    async def test_enqueues_media_job_when_media_context_present(self, monkeypatch):
+        monkeypatch.setattr(main.settings, "media_enabled", True)
         redis = _redis()
         redis.get = AsyncMock(return_value=json.dumps(_ctx()).encode())
         request = MagicMock()
@@ -272,10 +273,11 @@ class TestExecuteTurnMediaEnqueue:
         assert request.app.state.arq_pool.enqueue_job.await_args.args[0] == 'generate_turn_media_job'
 
     @pytest.mark.asyncio
-    async def test_regression_media_enqueue_failure_does_not_fail_the_turn(self):
+    async def test_regression_media_enqueue_failure_does_not_fail_the_turn(self, monkeypatch):
         """The text response already succeeded and matters more than the
         illustration -- a Redis hiccup enqueuing the media job must not
         turn a successful turn into a 500."""
+        monkeypatch.setattr(main.settings, "media_enabled", True)
         redis = _redis()
         redis.get = AsyncMock(return_value=json.dumps(_ctx()).encode())
         request = MagicMock()

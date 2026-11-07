@@ -60,8 +60,9 @@ class TestRegenerateTurnMediaEndpoint:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_resets_status_and_enqueues_regenerate_job(self):
+    async def test_resets_status_and_enqueues_regenerate_job(self, monkeypatch):
         import main
+        monkeypatch.setattr(main.settings, "media_enabled", True)
         row = MagicMock(image_prompt='a prompt', status='ready', error='old error')
         db = _mock_db(scalar_result=row)
         request = MagicMock()
@@ -154,8 +155,9 @@ class TestRegenerateTurnMediaJob:
         mock_pipeline.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reuses_stored_context_with_a_different_seed(self):
+    async def test_reuses_stored_context_with_a_different_seed(self, monkeypatch):
         import worker
+        monkeypatch.setattr(worker.settings, "media_enabled", True)
         row = MagicMock(image_prompt='prompt', narration_text='narration',
                          voice_id='af_sarah', voice_speed=1.0, image_seed=42)
         db = _mock_db(scalar_result=row)
@@ -170,8 +172,9 @@ class TestRegenerateTurnMediaJob:
         mock_pipeline.assert_awaited_once_with('sess-1', 3, 'prompt', 'narration', 'af_sarah', 1.0, 43)
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_a_computed_seed_when_no_prior_seed_stored(self):
+    async def test_falls_back_to_a_computed_seed_when_no_prior_seed_stored(self, monkeypatch):
         import worker
+        monkeypatch.setattr(worker.settings, "media_enabled", True)
         row = MagicMock(image_prompt='prompt', narration_text='narration',
                          voice_id='af_sarah', voice_speed=1.0, image_seed=None)
         db = _mock_db(scalar_result=row)

@@ -5,6 +5,7 @@ integration point that was previously missing."""
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import ai_service
+from rate_limiter import TPM_LIMIT
 
 
 class TestReserveTurnBudget:
@@ -22,6 +23,15 @@ class TestReserveTurnBudget:
             await ai_service._reserve_turn_budget(estimated_tokens=1234)
         mock_reserve.assert_awaited_once()
         assert mock_reserve.call_args.args[1] == 1234
+
+    @pytest.mark.asyncio
+    async def test_long_initialization_reserves_one_minute_cap_not_impossible_total(self):
+        with patch('ai_service.get_redis', new=AsyncMock(return_value=MagicMock())), \
+             patch('ai_service.reserve_token_budget', new=AsyncMock(return_value=True)) as mock_reserve:
+            await ai_service._reserve_turn_budget(estimated_tokens=ai_service.FULL_INIT_TOKEN_ESTIMATE)
+
+        assert mock_reserve.call_args.args[1] == TPM_LIMIT
+        assert mock_reserve.call_args.kwargs['max_wait'] == 60.0
 
 
 class TestEngineStepCallsReservationFirst:

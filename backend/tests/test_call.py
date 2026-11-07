@@ -2,7 +2,7 @@
 import pytest
 import re
 from unittest.mock import patch, MagicMock
-from engine.call import call
+from engine.call import call, async_stream_call
 
 
 def _fake_rate_error(message: str):
@@ -97,6 +97,78 @@ class TestCallNoClient:
 
         # Non-rate errors must not retry — only called once
         assert mock_client.chat.completions.create.call_count == 1
+
+    def test_gpt_oss_disables_separate_reasoning_output(self):
+        mock_client = MagicMock()
+        success = MagicMock()
+        success.choices[0].message.content = 'READY'
+        mock_client.chat.completions.create.return_value = success
+
+        with patch('engine.call._client_var') as mock_var, \
+             patch('engine.call._model_var') as mock_model, \
+             patch('engine.call._log_call'):
+            mock_var.get.return_value = mock_client
+            mock_model.get.return_value = 'openai/gpt-oss-20b'
+            call('system', [{'role': 'user', 'content': 'hi'}])
+
+        assert mock_client.chat.completions.create.call_args.kwargs['extra_body'] == {
+            'include_reasoning': False,
+            'reasoning_effort': 'low',
+        }
+
+    def test_gpt_oss_short_prompts_get_enough_completion_tokens(self):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value.choices[0].message.content = 'English'
+
+        with patch('engine.call._client_var') as mock_var, \
+             patch('engine.call._model_var') as mock_model, \
+             patch('engine.call._log_call'):
+            mock_var.get.return_value = mock_client
+            mock_model.get.return_value = 'openai/gpt-oss-20b'
+            call('system', [{'role': 'user', 'content': 'hi'}], max_tokens=8)
+
+        assert mock_client.chat.completions.create.call_args.kwargs['max_tokens'] == 128
+
+    def test_empty_model_response_is_rejected(self):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value.choices[0].message.content = ''
+
+        with patch('engine.call._client_var') as mock_var, \
+             patch('engine.call._model_var') as mock_model:
+            mock_var.get.return_value = mock_client
+            mock_model.get.return_value = 'test-model'
+            with pytest.raises(RuntimeError, match='empty response'):
+                call('system', [{'role': 'user', 'content': 'hi'}], retries=1)
+
+    @pytest.mark.asyncio
+    async def test_gpt_oss_stream_disables_separate_reasoning_output(self):
+        mock_async_client = MagicMock()
+        calls = []
+
+        async def create(**kwargs):
+            calls.append(kwargs)
+
+            async def chunks():
+                chunk = MagicMock()
+                chunk.choices[0].delta.content = 'READY'
+                yield chunk
+
+            return chunks()
+
+        mock_async_client.chat.completions.create = create
+        with patch('engine.call._async_client_var') as mock_var, \
+             patch('engine.call._model_var') as mock_model:
+            mock_var.get.return_value = mock_async_client
+            mock_model.get.return_value = 'openai/gpt-oss-20b'
+            result = [part async for part in async_stream_call(
+                'system', [{'role': 'user', 'content': 'hi'}]
+            )]
+
+        assert result == ['READY']
+        assert calls[0]['extra_body'] == {
+            'include_reasoning': False,
+            'reasoning_effort': 'low',
+        }
 
     def test_rate_limit_retries_up_to_limit(self):
         mock_client = MagicMock()

@@ -1,19 +1,19 @@
-"""Seed one ready-to-play public portfolio scenario into a fresh database.
+"""Seed one ready-to-play public portfolio scenario into the database.
 
-The demo prefab is authored as a small, versioned engine snapshot so the
-scenario is playable immediately and boot never spends Groq tokens creating
-seed data. It follows engine.serializer.serialize_engine's JSON shape.
+Its prefab is a captured, versioned result of the real engine initialization,
+so visitors can start immediately without spending Groq tokens on boot.
 """
 import asyncio
+import json
 import logging
 import secrets
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from auth import hash_password
 from database import AsyncSessionLocal, close_connections
-from engine.types import Entity, Memory, WorldState
 from models import Scenario, User
 
 logger = logging.getLogger(__name__)
@@ -44,76 +44,11 @@ GREETING = (
     "her hands away from the controls. 'I can kill the relay, or we can find out who sent that. "
     "Your call.'"
 )
-LAYER1 = (
-    "A winter storm has isolated the Kestrel relay station on a remote moon. Mara Venn is its "
-    "relay engineer and the only other person currently in the control room. She once served "
-    "aboard the survey ship Meridian, which vanished six years ago; she has admitted only that "
-    "she left before its final voyage. A newly received transmission uses Meridian's call sign "
-    "and contains a recording of the player's voice warning against opening the lower hatch. "
-    "The hatch has moved from the other side, but neither Mara nor the player has opened it. "
-    "Mara wants to identify the signal and keep the station safe; she is withholding some of her "
-    "history, but has not explained why. The player controls every choice and action for their "
-    "own character."
-)
-
-
 def _prefab_state() -> dict:
-    player = Entity(
-        name="Player", pronouns="they/them", is_player=True,
-        location="Kestrel relay control room", doing="uncommitted",
-    )
-    mara = Entity(
-        name=CHAR_NAME,
-        pronouns=CHAR_PRONOUNS,
-        role=CHAR_TITLE,
-        appearance=(
-            "A lean woman in her late thirties with close-cropped dark hair, a weatherproof "
-            "station jacket, and a thin burn scar along her left jaw."
-        ),
-        physical_state="Alert, with a faint tremor in her left hand",
-        mood="guarded and analytical",
-        location="Kestrel relay control room, beside the console",
-        doing="watching the signal trace without touching the controls",
-        emotional_state="uneasy about the Meridian call sign",
-        behavioral_read=(
-            "Mara uses precision to keep fear from becoming a decision. She tests claims against "
-            "what the instruments actually show. She protects people by giving them choices, "
-            "even when she would prefer to decide for them. She is ashamed of leaving the "
-            "Meridian before its last voyage, but will not invent an explanation to make herself "
-            "look better. Under pressure, Mara always checks who might be harmed before she "
-            "touches a control."
-        ),
-        never_does="Mara would never knowingly endanger another person to protect her reputation.",
-    )
-    opening_message = {"role": "assistant", "content": GREETING}
-    return {
-        "entities": [player.__dict__, mara.__dict__],
-        "world": WorldState(
-            location="Kestrel relay station control room, remote moon",
-            time_of_day="station night",
-            era="near-future space exploration",
-            atmosphere="isolated, storm-bound, watchful",
-            flags=["Meridian signal", "sealed lower hatch", "storm isolation"],
-        ).__dict__,
-        "memory": Memory(pinned=[
-            "The Meridian survey ship vanished six years ago.",
-            "Mara served aboard the Meridian and left before its final voyage.",
-            "The new signal carries the Meridian call sign and a recording of the player's voice.",
-            "The lower hatch has moved, but it remains sealed.",
-            "Mara offered to let the player decide whether to kill the relay or investigate.",
-        ]).__dict__,
-        "layer1": LAYER1,
-        "history": [opening_message],
-        "display_history": [opening_message],
-        "turn": 0,
-        "scene_lang": "English",
-        "last_target": CHAR_NAME,
-        "sp_note": "",
-        "char_personality": CHAR_PERSONALITY,
-        "filter_state": "off",
-        "filter_lock": False,
-        "metrics": {"turns": 0, "sv_violations": 0, "latencies": [], "compressions": 0},
-    }
+    """Load the versioned prefab captured from the real engine initialization."""
+    path = Path(__file__).with_name("demo_prefab.json")
+    with path.open(encoding="utf-8") as prefab_file:
+        return json.load(prefab_file)
 
 
 async def seed_demo_scenario() -> None:
@@ -127,7 +62,7 @@ async def seed_demo_scenario() -> None:
             is_admin=False,
         ).on_conflict_do_nothing())
 
-        await db.execute(pg_insert(Scenario).values(
+        scenario_values = dict(
             id=DEMO_SCENARIO_ID,
             creator_id=DEMO_OWNER_ID,
             char_name=CHAR_NAME,
@@ -148,7 +83,11 @@ async def seed_demo_scenario() -> None:
             is_published=True,
             prefab_engine_state=_prefab_state(),
             prefab_status="ready",
-        ).on_conflict_do_nothing())
+        )
+        await db.execute(pg_insert(Scenario).values(**scenario_values).on_conflict_do_update(
+            index_elements=[Scenario.id],
+            set_={key: value for key, value in scenario_values.items() if key != "id"},
+        ))
         await db.commit()
 
         scenario = (await db.execute(
