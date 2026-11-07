@@ -21,7 +21,8 @@ The deployment uses `SERVERLESS_MODE=true`: the app does not start an ARQ worker
 
 | Variable | Value |
 | --- | --- |
-| `DATABASE_URL` | Neon Postgres connection URL |
+| `DATABASE_URL` | Neon pooled Postgres connection URL (`-pooler` host), for application requests |
+| `DATABASE_URL_UNPOOLED` | Neon direct Postgres URL, for Alembic migrations during build |
 | `REDIS_URL` | Upstash TLS Redis connection URL (`rediss://…`) |
 | `JWT_SECRET` | A newly generated, long random secret (at least 32 random bytes) |
 | `GROQ_API_KEY` | Your Groq API key; keep it server-side and never use a `VITE_` prefix |

@@ -41,8 +41,12 @@ class Settings(BaseSettings):
             if scheme == "postgresql+asyncpg":
                 # asyncpg calls its TLS option `ssl`, while providers often
                 # publish libpq-style `sslmode=require` URLs.
-                query = [("ssl" if key == "sslmode" else key, val)
-                         for key, val in parse_qsl(parts.query, keep_blank_values=True)]
+                # Neon/libpq URLs can include channel_binding=require, which
+                # asyncpg does not accept as a connection keyword. Keep TLS
+                # enabled via sslmode -> ssl, and omit that unsupported hint.
+                query = [("ssl" if key.lower() == "sslmode" else key, val)
+                         for key, val in parse_qsl(parts.query, keep_blank_values=True)
+                         if key.lower() != "channel_binding"]
                 return urlunsplit((scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
         return value
     cors_origins: str = "http://localhost:3000"
