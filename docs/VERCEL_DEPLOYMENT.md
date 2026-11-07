@@ -1,44 +1,77 @@
 # Vercel portfolio deployment
 
-This setup deploys the Vite app and FastAPI API together through Vercel Services. Neon supplies PostgreSQL and Upstash supplies Redis. It is intended for a small public portfolio demo, not a production service. Vercel Services is currently in beta, so enable the Services framework in the Vercel project settings. Vercel Hobby is the free personal plan; leave the project on Hobby and do not start a Pro trial or add a paid plan.
+This repository is configured as a Vercel Services project: the Vite frontend serves `/`, and the
+FastAPI backend serves `/api`. The free Hobby plan is for personal projects; leave the project on
+Hobby and do not start a Pro trial or add a paid plan. Vercel Services may require beta access in
+your account; the project import should show **Configuration defined in vercel.json** when it has
+recognized the service map. See [Vercel Services](https://vercel.com/docs/services) and the
+[Hobby plan](https://vercel.com/docs/plans/hobby).
 
-The deployment uses `SERVERLESS_MODE=true`: the app does not start an ARQ worker. It can play published, prefab-ready scenarios, including the seeded “The Quiet Frequency” scenario. Session initialization runs inline using the saved prefab. Creating or publishing scenarios, draft previews, and generated media are disabled for this hosting mode. Each visitor still needs to create an account and persona.
+## Connected services
 
-## 1. Create the free backing services
+The backing services for this project are already provisioned:
 
-1. Create a free Neon Postgres project. Copy the connection string for the database. Add `sslmode=require` if Neon provides it. Keep it private.
-2. Create a free Upstash Redis database. Copy its TLS `rediss://` connection URL, not the REST URL or token.
-3. Keep both URLs ready for Vercel's environment-variable form. Free-plan availability and quotas can change.
+- Neon Postgres project `floral-cake-92062204`, branch `production`.
+- Upstash Redis database `scenerai-portfolio`, primary region `us-east-1` (AWS US East 1), Free
+  plan.
 
-## 2. Create the Vercel project
+Connection strings and tokens belong in Vercel Environment Variables, never in GitHub. The local
+`.env` also contains Docker-local database and Redis credentials and other development settings;
+do not import the whole file without removing those unrelated entries.
 
-1. Sign in to Vercel and choose **Add New → Project**.
-2. Import `Marioromeo7/scenerai` from GitHub.
-3. Leave the Root Directory set to the repository root (`.`). Do not select only `frontend/app`; `vercel.json` builds both services.
-4. In the project’s **Settings → Build and Deployment**, set the Framework Preset to **Services**. Vercel’s services feature is in beta and this setting is required.
-5. Add the environment variables below under **Settings → Environment Variables**. Select **Production** (and **Preview** too if you want preview deployments to work). Add them before the first deploy so the backend build can migrate and seed the database.
-6. Save and deploy.
+## Vercel project configuration
+
+Import `Marioromeo7/scenerai` on the `main` branch. Use the repository root (`.`), the **Services**
+framework, and the existing service map in `vercel.json`. It routes the backend to `/api` and the
+frontend to `/`. Do not import `imagepipe` or `loadtest` as deployed services.
+
+Add these variables to the project's **Production** environment before triggering the first
+production build:
 
 | Variable | Value |
 | --- | --- |
-| `DATABASE_URL` | Neon pooled Postgres connection URL (`-pooler` host), for application requests |
-| `DATABASE_URL_UNPOOLED` | Neon direct Postgres URL, for Alembic migrations during build |
-| `REDIS_URL` | Upstash TLS Redis connection URL (`rediss://…`) |
-| `JWT_SECRET` | A newly generated, long random secret (at least 32 random bytes) |
-| `GROQ_API_KEY` | Your Groq API key; keep it server-side and never use a `VITE_` prefix |
+| `DATABASE_URL` | Neon pooled connection URL for app requests |
+| `DATABASE_URL_UNPOOLED` | Neon direct connection URL for build-time Alembic migrations |
+| `REDIS_URL` | Upstash TLS TCP URL (`rediss://…`); the FastAPI backend uses this variable |
+| `JWT_SECRET` | Long random secret, at least 32 random bytes |
+| `GROQ_API_KEY` | Groq API key, server-side only |
 | `SERVERLESS_MODE` | `true` |
 | `MEDIA_ENABLED` | `false` |
 | `VITE_PORTFOLIO_MODE` | `true` |
 | `VITE_MEDIA_ENABLED` | `false` |
 
-`ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_FORMAT` are optional. Add the webhook URL only as a Vercel secret environment variable if you want the existing alerts. Do not put secrets in the repository or frontend variables.
+`ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_FORMAT` are optional; add them only if you want alerts
+delivered to the configured webhook. Use the existing format value from your private `.env` or
+`generic`. Do not add `UPSTASH_REDIS_REST_URL` or `UPSTASH_REDIS_REST_TOKEN` for this Python
+deployment; the backend uses `REDIS_URL`.
 
-## 3. Verify the live link
+If you import `.env` through Vercel’s form, remove local-only entries such as `POSTGRES_DB`,
+`POSTGRES_USER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `NEON_BRANCH*`, and the unused Upstash REST
+credentials before deploying. Never commit `.env` or paste its values into GitHub.
 
-After the first deployment completes, open the generated `https://…vercel.app` URL. Check `https://…vercel.app/api/health`, then create an account, create a persona, and play the seeded scenario. The backend build runs Alembic migrations and the idempotent demo seeder. Check the Vercel deployment build logs if either step fails.
+## Trigger the production build
 
-The app makes Groq requests on behalf of public visitors, so set account limits and monitor usage. Vercel Hobby is intended for personal, non-commercial use, and functions have platform time and resource limits; this is a portfolio demo configuration. Free database and Redis tiers also have quotas and may sleep or be interrupted.
+Vercel creates a production deployment from a push to the configured production branch (`main`).
+If the project page says the domain is configured but there is no Production deployment, confirm
+the Production variables above are saved, then push a new commit to `main`. A commit made before the
+Vercel project was connected does not trigger a build retroactively. The new push will trigger it
+automatically.
+
+The backend build applies Alembic migrations using `DATABASE_URL_UNPOOLED`, then runs the
+idempotent demo seeder using `DATABASE_URL`. It inserts the prefab-ready public scenario “The Quiet
+Frequency” without making a Groq call. `SERVERLESS_MODE=true` disables the persistent ARQ worker;
+published prefab-ready scenarios can be played inline, while scenario creation, publishing, draft
+previews, and generated media are disabled in this portfolio profile.
+
+## Verify the live link
+
+When Vercel reports the deployment **Ready**, open its generated `https://…vercel.app` URL and
+check `/api/health`. Then create an account and persona and play “The Quiet Frequency”. Visitors'
+turns use the configured Groq key and its quota. Neon, Upstash, and Vercel also have free-tier
+limits.
 
 ## Update or remove the deployment
 
-Once Git integration is connected, pushes to the selected production branch trigger a new deployment. To take the demo offline, delete or disable the Vercel project. Delete the Neon and Upstash resources separately if you no longer need them or the stored data.
+Later pushes to `main` create new production deployments. To take the demo offline, disable or
+delete the Vercel project. Delete the Neon and Upstash resources separately if you no longer need
+their stored data.

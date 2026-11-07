@@ -13,7 +13,8 @@ That's the text engine. There's a full generative-media pipeline underneath it t
 Diffusion image generation, inpainting, per-character consistency scoring, and local TTS — with
 its own empirical research behind the prompt/generation strategy, not just an API call bolted on.
 
-- **473 backend tests**, all live-verified against a running stack, not just green in CI
+- A backend test suite covering authentication, scenario and session flows, workers, alerts,
+  telemetry, and deployment behavior
 - A continuity guard and per-character **sovereignty check** on every turn — an independent
   validator model, not just a system-prompt instruction, blocks the narrator from ever moving,
   feeling, or deciding for the player
@@ -39,7 +40,8 @@ Copy-Item .env.example .env
 docker compose up --build -d
 ```
 
-Open http://localhost — register, create a persona, create a scenario, publish it, then play. For a temporary public portfolio link, see [docs/PORTFOLIO_DEPLOYMENT.md](docs/PORTFOLIO_DEPLOYMENT.md).
+Open http://localhost — register, create a persona, create a scenario, publish it, then play. To
+host the portfolio away from this PC, follow [the Vercel deployment guide](docs/VERCEL_DEPLOYMENT.md).
 
 ## How the text engine works
 
@@ -135,14 +137,11 @@ See `.env.example` for all required variables. The most important:
 
 Built by Mario George — [LinkedIn](https://www.linkedin.com/in/mario-hossam-mitry-george) · [GitHub](https://github.com/Marioromeo7) · [metrymarioromeo546@gmail.com](mailto:metrymarioromeo546@gmail.com)
 
-## Portfolio preview deployment
+## Public portfolio deployment
 
-See [docs/PORTFOLIO_DEPLOYMENT.md](docs/PORTFOLIO_DEPLOYMENT.md) for the PC-independent Render setup and the temporary local tunnel option. In short:
-
-```powershell
-Copy-Item .env.example .env
-# Set POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, and GROQ_API_KEY in .env.
-docker compose up --build -d
-```
-
-Open http://localhost. Only Nginx is published to the host, on `127.0.0.1:80`; database, Redis, and API ports remain private inside Compose. Generated media is disabled for the temporary portfolio profile. To expose the local site temporarily, run `cloudflared tunnel --url http://localhost:80` in a separate terminal. The link is temporary and anyone with it can access the demo; Groq usage is shared across visitors.
+The Vercel setup serves the Vite frontend at `/` and the FastAPI backend at `/api`, with Neon
+Postgres and Upstash Redis. The portfolio profile runs without the persistent ARQ worker and
+seeds the prefab-ready “The Quiet Frequency” scenario during deployment. See
+[docs/VERCEL_DEPLOYMENT.md](docs/VERCEL_DEPLOYMENT.md) for environment variables, the first
+production build, and live verification. The Render Blueprint alternative is documented in
+[docs/PORTFOLIO_DEPLOYMENT.md](docs/PORTFOLIO_DEPLOYMENT.md).

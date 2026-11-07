@@ -1,5 +1,10 @@
 # Deploying Scenarai to Render
 
+> **Alternative hosting guide:** the current portfolio path is Vercel. Follow
+> [VERCEL_DEPLOYMENT.md](VERCEL_DEPLOYMENT.md) for the configured Vite + FastAPI services using the
+> existing Neon and Upstash resources. This file describes a separate Render Blueprint and is not
+> needed to create or update the Vercel deployment.
+
 This repository includes a Render Blueprint and a single-service Docker image for the text-only portfolio app. The frontend is served by FastAPI from the same origin; an ARQ worker runs beside the API. PostgreSQL and Redis are external managed services so data does not live on the app container's temporary disk.
 
 ## Free portfolio setup
