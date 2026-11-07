@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import { api } from './api'
+import { api, onSessionExpired } from './api'
 
 const AuthContext = createContext(null)
 
@@ -8,7 +8,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.onSessionExpired(() => setUser(null))
+    onSessionExpired(() => setUser(null))
   }, [])
 
   useEffect(() => {
@@ -57,3 +57,4 @@ export function AuthProvider({ children }) {
 }
 
 export function useAuth() { return useContext(AuthContext) }
+
