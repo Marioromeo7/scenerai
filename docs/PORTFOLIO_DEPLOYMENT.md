@@ -28,8 +28,9 @@ Upstash currently lists a free allowance of 256 MB, 10 GB monthly bandwidth, and
 2. In Render, choose **New → Blueprint**, connect the Scenarai repository, and apply the root `render.yaml`.
 3. Set the prompted `DATABASE_URL` to the Neon URL, `REDIS_URL` to the Upstash `rediss://` URL, and `GROQ_API_KEY` to the existing key from your private local `.env`.
 4. Render generates `JWT_SECRET`. Leave `MEDIA_ENABLED=false`.
-5. Start the first deploy and watch the deploy logs. The container runs `alembic upgrade head`, seeds a published, ready-to-play portfolio scenario, then starts the API and worker. The seed is safe to run on every startup and does not call the language model.
-6. When the service is live, open its `https://….onrender.com` URL.
+5. To enable alerts, add `ALERT_WEBHOOK_URL` in the Render service's environment settings and set it to your incoming webhook URL. Optionally set `ALERT_WEBHOOK_FORMAT` to `discord`, `slack`, or `generic` (default). Keep the URL private.
+6. Start the first deploy and watch the deploy logs. The container runs `alembic upgrade head`, seeds a published, ready-to-play portfolio scenario, then starts the API and worker. The seed is safe to run on every startup and does not call the language model.
+7. When the service is live, open its `https://….onrender.com` URL.
 
 Never commit `.env` or paste secrets into GitHub, a chat, or a public issue. Add them only in Render's secret environment-variable fields. The public app uses your Groq key for visitors' turns; check your Groq account's limits and usage.
 
@@ -39,6 +40,7 @@ Never commit `.env` or paste secrets into GitHub, a chat, or a public issue. Add
 - Neon stores application records. Its free compute scales to zero when idle.
 - Upstash provides Redis to the API and worker. Session state is temporary by design; Redis restarts or free-tier limits can interrupt active sessions/jobs.
 - Generated image/audio/video features stay off (`MEDIA_ENABLED=false`).
+- When a webhook is configured, alerts cover startup/process failures, unhandled API errors, failed scenario/session preparation, and high or exhausted Groq per-minute capacity. Alerts are cooldown-limited and omit prompts, user content, and secret values.
 
 The Render URL remains the same when the free service sleeps, but a visitor's first request after inactivity waits for it to wake. Render may restart free instances and has no uptime guarantee on this tier.
 

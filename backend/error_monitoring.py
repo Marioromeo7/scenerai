@@ -26,6 +26,9 @@ import uuid
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.background import BackgroundTask
+
+from alerting import send_alert
 
 logger = logging.getLogger("scenarai.errors")
 
@@ -73,10 +76,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         type(exc).__name__, exc, traceback.format_exc(),
     )
 
-    # Sentry integration point -- once SENTRY_DSN is configured:
-    #   import sentry_sdk
-    #   sentry_sdk.capture_exception(exc)
-
     # Set directly on this response, not left to RequestIDMiddleware's
     # post-call_next() code -- that code never runs for an exception this
     # handler is catching (see RequestIDMiddleware's docstring above).
@@ -84,4 +83,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         status_code=500,
         content={"detail": "Internal server error.", "request_id": request_id},
         headers={"X-Request-ID": request_id},
+        background=BackgroundTask(
+            send_alert,
+            "unhandled_error",
+            "An unhandled server error occurred.",
+            details={
+                "request_id": request_id,
+                "method": request.method,
+                "route": getattr(request.scope.get("route"), "path", "unknown"),
+                "exception_type": type(exc).__name__,
+            },
+            cooldown_key=f"unhandled-error:{type(exc).__name__}",
+            cooldown_seconds=300,
+        ),
     )

@@ -5,10 +5,19 @@ import subprocess
 import sys
 import time
 
+from alerting import send_alert_sync
+
 
 def main() -> int:
-    subprocess.run(["alembic", "upgrade", "head"], check=True)
-    subprocess.run([sys.executable, "seed_demo.py"], check=True)
+    try:
+        subprocess.run(["alembic", "upgrade", "head"], check=True)
+        subprocess.run([sys.executable, "seed_demo.py"], check=True)
+    except Exception as exc:
+        send_alert_sync(
+            "startup_failed", "Database migration or demo seeding failed.",
+            details={"exception_type": type(exc).__name__},
+        )
+        raise
 
     port = os.environ.get("PORT", "10000")
     processes = [
@@ -32,9 +41,14 @@ def main() -> int:
 
     try:
         while not stopping:
-            for process in processes:
+            for name, process in zip(("api", "worker"), processes):
                 code = process.poll()
                 if code is not None:
+                    if not stopping:
+                        send_alert_sync(
+                            "process_exited", f"The {name} process exited unexpectedly.",
+                            details={"exit_code": code},
+                        )
                     stop(signal.SIGTERM, None)
                     return code or 1
             time.sleep(0.5)

@@ -7,6 +7,7 @@ from arq.connections import RedisSettings
 from sqlalchemy import select, update
 
 from config import settings
+from alerting import send_alert
 from database import get_redis, AsyncSessionLocal
 from models import Scenario, TurnMedia
 from ai_service import engine_prefab, engine_init, engine_init_from_prefab
@@ -62,6 +63,7 @@ async def prefab_engine_job(
         async with AsyncSessionLocal() as db:
             await db.execute(update(Scenario).where(Scenario.id == scenario_id).values(prefab_status="failed"))
             await db.commit()
+        await send_alert("scenario_prefab_failed", "Scenario preparation was skipped due to capacity.", details={"scenario_id": scenario_id[:8]}, cooldown_key="scenario-prefab-failed", cooldown_seconds=300)
         return
     try:
         prefab = await engine_prefab(char_name, char_pronouns, char_title, char_personality, greeting)
@@ -75,9 +77,11 @@ async def prefab_engine_job(
             else:
                 await db.execute(update(Scenario).where(Scenario.id == scenario_id).values(prefab_status="failed"))
                 logger.error(f'Prefab failed for scenario {scenario_id[:8]}: engine_prefab returned nothing')
+                await send_alert("scenario_prefab_failed", "Scenario preparation did not produce a ready state.", details={"scenario_id": scenario_id[:8]}, cooldown_key="scenario-prefab-failed", cooldown_seconds=300)
             await db.commit()
     except Exception as e:
         logger.error(f'Prefab failed for scenario {scenario_id[:8]}: {e}')
+        await send_alert("scenario_prefab_failed", "Scenario preparation raised an error.", details={"scenario_id": scenario_id[:8], "exception_type": type(e).__name__}, cooldown_key="scenario-prefab-failed", cooldown_seconds=300)
         async with AsyncSessionLocal() as db:
             await db.execute(update(Scenario).where(Scenario.id == scenario_id).values(prefab_status="failed"))
             await db.commit()
@@ -147,6 +151,7 @@ async def init_engine_job(
             logger.info(f'Session {session_id[:8]} initialized and ready')
     except Exception as e:
         logger.error(f'Engine init failed for {session_id[:8]}: {e}')
+        await send_alert("session_initialization_failed", "A play session failed to initialize.", details={"session_id": session_id[:8], "exception_type": type(e).__name__}, cooldown_key="session-initialization-failed", cooldown_seconds=300)
         raw = await redis.get(f"session:{session_id}")
         if raw:
             data = json.loads(raw)

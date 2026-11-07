@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     groq_api_key: str = ""
     media_enabled: bool = False
+    alert_webhook_url: str = ""
+    alert_webhook_format: str = "generic"
 
     @field_validator("database_url", mode="before")
     @classmethod

@@ -61,11 +61,26 @@ async def reserve_token_budget(redis, estimated_tokens: int, max_wait: float = 3
             await redis.expire(WINDOW_KEY, WINDOW_SECONDS)
 
         if new_total <= TPM_LIMIT:
+            if new_total >= int(TPM_LIMIT * 0.8):
+                from alerting import send_alert
+                await send_alert(
+                    "groq_capacity_high",
+                    "Estimated Groq token reservations reached at least 80% of the per-minute limit.",
+                    details={"estimated_tokens": new_total, "limit": TPM_LIMIT},
+                    cooldown_key="groq-capacity-high", cooldown_seconds=600,
+                )
             return True
 
         # over budget -- release our reservation and wait for room
         await redis.decrby(WINDOW_KEY, estimated_tokens)
         if time.monotonic() >= deadline:
+            from alerting import send_alert
+            await send_alert(
+                "groq_capacity_wait_exceeded",
+                "A request could not reserve Groq capacity within the wait window.",
+                details={"limit": TPM_LIMIT},
+                cooldown_key="groq-capacity-wait-exceeded", cooldown_seconds=600,
+            )
             return False
         await asyncio.sleep(POLL_INTERVAL)
 
