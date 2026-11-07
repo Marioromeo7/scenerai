@@ -9,7 +9,11 @@
       "root": "backend",
       "entrypoint": "main:app",
       "framework": "fastapi",
-      "maxDuration": 300
+      "functions": {
+        "**/*.py": {
+          "maxDuration": 300
+        }
+      }
     }
   },
   "rewrites": [
